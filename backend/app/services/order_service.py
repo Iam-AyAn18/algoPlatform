@@ -59,7 +59,7 @@ async def place_order(order_in: OrderCreate, db: AsyncSession) -> OrderResponse:
     else:  # SL
         # For paper trading, execute immediately at trigger price if market
         # has already crossed it; otherwise use trigger as executed price.
-        trigger = order_in.trigger_price  # already validated above
+        trigger = order_in.trigger_price  # guaranteed non-None: SL without trigger_price was rejected at line 28
         if order_in.side == OrderSide.SELL:
             # SL-Sell: triggers when price drops to/below trigger_price
             executed_price = min(market_price, trigger)

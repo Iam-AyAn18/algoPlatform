@@ -216,3 +216,215 @@ def test_backtest_service():
     assert result.total_trades >= 0
     assert isinstance(result.equity_curve, list)
     assert len(result.equity_curve) > 0
+
+
+# ── Quote Cache ───────────────────────────────────────────────────────────────
+
+def test_quote_cache_ttl():
+    """Cached quotes are returned within TTL and evicted after expiry."""
+    import datetime
+    from app.services.market_data import (
+        _set_cached_quote, _get_cached_quote, clear_quote_cache,
+        QUOTE_CACHE_TTL_SECONDS,
+    )
+    from app.models.schemas import QuoteResponse
+
+    clear_quote_cache()
+
+    dummy = QuoteResponse(
+        symbol="CACHE_TEST", exchange="NSE", name="Cache Test", price=100.0,
+        open=99.0, high=101.0, low=98.0, prev_close=99.0,
+        change=1.0, change_pct=1.0, volume=1000,
+    )
+    _set_cached_quote("CACHE_TEST", "NSE", dummy)
+
+    # Should hit cache
+    cached = _get_cached_quote("CACHE_TEST", "NSE")
+    assert cached is not None
+    assert cached.symbol == "CACHE_TEST"
+
+    # Expire via time-travel: manually set old timestamp
+    from app.services import market_data as md
+    import threading
+    key = "CACHE_TEST:NSE"
+    with md._cache_lock:
+        quote, _ = md._quote_cache[key]
+        old_time = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - \
+                   datetime.timedelta(seconds=QUOTE_CACHE_TTL_SECONDS + 1)
+        md._quote_cache[key] = (quote, old_time)
+
+    # Should be evicted now
+    assert _get_cached_quote("CACHE_TEST", "NSE") is None
+
+    clear_quote_cache()
+
+
+# ── SL Order ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_sl_order_rejected_without_trigger(client):
+    """SL orders without trigger_price should be REJECTED."""
+    payload = {
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "side": "SELL",
+        "order_type": "SL",
+        "quantity": 1,
+        # no trigger_price
+    }
+    resp = await client.post("/orders/", json=payload)
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "REJECTED"
+
+
+@pytest.mark.asyncio
+async def test_sl_order_field_in_response(client):
+    """OrderResponse includes trigger_price field."""
+    payload = {
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "quantity": 1,
+    }
+    resp = await client.post("/orders/", json=payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert "trigger_price" in data  # field present even if None
+
+
+# ── Portfolio Reset ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_portfolio_reset(client):
+    """POST /portfolio/reset returns a clean portfolio at initial capital."""
+    resp = await client.post("/portfolio/reset")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cash"] == data["initial_capital"]
+    assert data["positions"] == []
+    assert data["invested"] == 0.0
+
+
+# ── New Strategies ────────────────────────────────────────────────────────────
+
+def test_bollinger_bands_signal_logic():
+    """Bollinger Bands signal correctly detects price below lower band."""
+    import pandas as pd
+    import numpy as np
+    import app.services.strategy_service as ss
+
+    # Tightly clustered prices (small std) followed by a drop below the lower BB
+    rng = np.random.default_rng(42)
+    base = 200 + rng.normal(0, 0.2, 59)   # tiny variance → narrow bands
+    prices = np.concatenate([base, [185.0]])  # last price is well below lower band
+    dates = pd.date_range("2023-01-01", periods=len(prices), freq="B")
+    df = pd.DataFrame({"close": prices, "open": prices, "high": prices, "low": prices, "volume": 1000}, index=dates)
+
+    original = ss._df_from_bars
+    ss._df_from_bars = lambda sym, exch, period="6mo": df
+
+    result = ss.bollinger_bands_signal("TEST", "NSE", period=20, std_dev=2.0)
+    ss._df_from_bars = original
+
+    assert result.signal == "BUY"   # price dropped below lower band
+    assert result.strategy == "BOLLINGER_BANDS"
+    assert 0.0 <= result.confidence <= 1.0
+
+
+def test_stochastic_signal_logic():
+    """Stochastic signal returns a valid StrategySignal shape."""
+    import pandas as pd
+    import numpy as np
+    import app.services.strategy_service as ss
+
+    n = 60
+    np.random.seed(7)
+    prices = np.cumsum(np.random.randn(n)) + 200
+    dates = pd.date_range("2023-01-01", periods=n, freq="B")
+    df = pd.DataFrame({"close": prices, "open": prices, "high": prices * 1.01, "low": prices * 0.99, "volume": 1000}, index=dates)
+
+    original = ss._df_from_bars
+    ss._df_from_bars = lambda sym, exch, period="6mo": df
+
+    result = ss.stochastic_signal("TEST", "NSE")
+    ss._df_from_bars = original
+
+    assert result.signal in ("BUY", "SELL", "HOLD")
+    assert result.strategy == "STOCHASTIC"
+    assert 0.0 <= result.confidence <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_list_strategies_includes_new(client):
+    """GET /strategies/ includes BOLLINGER_BANDS and STOCHASTIC."""
+    resp = await client.get("/strategies/")
+    assert resp.status_code == 200
+    strategies = resp.json()
+    assert "BOLLINGER_BANDS" in strategies
+    assert "STOCHASTIC" in strategies
+
+
+def test_backtest_bollinger_bands():
+    """Backtest runs end-to-end with BOLLINGER_BANDS strategy."""
+    from app.services.backtest_service import run_backtest
+    from app.models.schemas import BacktestRequest
+    import pandas as pd
+    import numpy as np
+    import app.services.backtest_service as bs
+
+    n = 200
+    np.random.seed(10)
+    prices = np.cumsum(np.random.randn(n) * 3) + 300
+    dates = pd.date_range("2022-01-01", periods=n, freq="B")
+    df = pd.DataFrame({
+        "open": prices, "high": prices * 1.01, "low": prices * 0.99,
+        "close": prices, "volume": 10000,
+    }, index=dates)
+
+    original = bs._fetch_df
+    bs._fetch_df = lambda sym, exch, start, end: df
+
+    req = BacktestRequest(
+        symbol="TEST", exchange="NSE", strategy="BOLLINGER_BANDS",
+        start_date="2022-01-01", end_date="2022-12-31", initial_capital=100_000,
+        params={"period": 20, "std_dev": 2.0},
+    )
+    result = run_backtest(req)
+    bs._fetch_df = original
+
+    assert result.final_value > 0
+    assert result.strategy == "BOLLINGER_BANDS"
+    assert len(result.equity_curve) > 0
+
+
+def test_backtest_stochastic():
+    """Backtest runs end-to-end with STOCHASTIC strategy."""
+    from app.services.backtest_service import run_backtest
+    from app.models.schemas import BacktestRequest
+    import pandas as pd
+    import numpy as np
+    import app.services.backtest_service as bs
+
+    n = 200
+    np.random.seed(11)
+    prices = np.cumsum(np.random.randn(n) * 2) + 400
+    dates = pd.date_range("2022-01-01", periods=n, freq="B")
+    df = pd.DataFrame({
+        "open": prices, "high": prices * 1.01, "low": prices * 0.99,
+        "close": prices, "volume": 10000,
+    }, index=dates)
+
+    original = bs._fetch_df
+    bs._fetch_df = lambda sym, exch, start, end: df
+
+    req = BacktestRequest(
+        symbol="TEST", exchange="NSE", strategy="STOCHASTIC",
+        start_date="2022-01-01", end_date="2022-12-31", initial_capital=100_000,
+        params={"k_period": 14, "d_period": 3},
+    )
+    result = run_backtest(req)
+    bs._fetch_df = original
+
+    assert result.final_value > 0
+    assert result.strategy == "STOCHASTIC"

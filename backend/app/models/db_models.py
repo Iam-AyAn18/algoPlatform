@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models for persisted data."""
 import datetime
-from sqlalchemy import String, Float, Integer, DateTime, Enum, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import String, Float, Integer, DateTime, Enum
+from sqlalchemy.orm import Mapped, mapped_column
 import enum
 
 from app.core.database import Base
@@ -22,6 +22,7 @@ class OrderStatus(str, enum.Enum):
 class OrderType(str, enum.Enum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
+    SL = "SL"      # Stop-Loss: triggered when market price crosses trigger_price
 
 
 class Order(Base):
@@ -33,7 +34,8 @@ class Order(Base):
     side: Mapped[OrderSide] = mapped_column(Enum(OrderSide), nullable=False)
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType), default=OrderType.MARKET)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    price: Mapped[float] = mapped_column(Float, nullable=True)          # limit price
+    price: Mapped[float] = mapped_column(Float, nullable=True)           # limit price (LIMIT orders)
+    trigger_price: Mapped[float] = mapped_column(Float, nullable=True)   # stop trigger (SL orders)
     executed_price: Mapped[float] = mapped_column(Float, nullable=True)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.PENDING)
     strategy: Mapped[str] = mapped_column(String(50), nullable=True)

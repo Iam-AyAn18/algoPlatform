@@ -24,6 +24,24 @@ async def _get_or_create_portfolio(db: AsyncSession) -> Portfolio:
 
 
 async def place_order(order_in: OrderCreate, db: AsyncSession) -> OrderResponse:
+    # Validate SL order has trigger_price
+    if order_in.order_type == OrderType.SL and not order_in.trigger_price:
+        order = Order(
+            symbol=order_in.symbol.upper(),
+            exchange=order_in.exchange.upper(),
+            side=order_in.side,
+            order_type=order_in.order_type,
+            quantity=order_in.quantity,
+            price=order_in.price,
+            trigger_price=order_in.trigger_price,
+            strategy=order_in.strategy,
+            status=OrderStatus.REJECTED,
+        )
+        db.add(order)
+        await db.commit()
+        await db.refresh(order)
+        return OrderResponse.model_validate(order)
+
     portfolio = await _get_or_create_portfolio(db)
 
     # Fetch current market price
@@ -33,7 +51,21 @@ async def place_order(order_in: OrderCreate, db: AsyncSession) -> OrderResponse:
     except Exception:
         market_price = order_in.price or 0.0
 
-    executed_price = market_price if order_in.order_type == OrderType.MARKET else (order_in.price or market_price)
+    # Determine executed price based on order type
+    if order_in.order_type == OrderType.MARKET:
+        executed_price = market_price
+    elif order_in.order_type == OrderType.LIMIT:
+        executed_price = order_in.price or market_price
+    else:  # SL
+        # For paper trading, execute immediately at trigger price if market
+        # has already crossed it; otherwise use trigger as executed price.
+        trigger = order_in.trigger_price  # already validated above
+        if order_in.side == OrderSide.SELL:
+            # SL-Sell: triggers when price drops to/below trigger_price
+            executed_price = min(market_price, trigger)
+        else:
+            # SL-Buy: triggers when price rises to/above trigger_price
+            executed_price = max(market_price, trigger)
 
     order = Order(
         symbol=order_in.symbol.upper(),
@@ -42,6 +74,7 @@ async def place_order(order_in: OrderCreate, db: AsyncSession) -> OrderResponse:
         order_type=order_in.order_type,
         quantity=order_in.quantity,
         price=order_in.price,
+        trigger_price=order_in.trigger_price,
         strategy=order_in.strategy,
     )
 

@@ -51,6 +51,9 @@ class OrderCreate(BaseModel):
     order_type: OrderType = OrderType.MARKET
     quantity: int = Field(..., gt=0)
     price: Optional[float] = Field(None, description="Required for LIMIT orders")
+    trigger_price: Optional[float] = Field(
+        None, description="Required for SL orders – order executes when market price crosses this level"
+    )
     strategy: Optional[str] = None
 
 
@@ -62,6 +65,7 @@ class OrderResponse(BaseModel):
     order_type: OrderType
     quantity: int
     price: Optional[float]
+    trigger_price: Optional[float]
     executed_price: Optional[float]
     status: OrderStatus
     strategy: Optional[str]
@@ -130,7 +134,10 @@ class StrategySignal(BaseModel):
 class BacktestRequest(BaseModel):
     symbol: str
     exchange: str = "NSE"
-    strategy: str = Field(..., description="MA_CROSSOVER | RSI | MACD")
+    strategy: str = Field(
+        ...,
+        description="MA_CROSSOVER | RSI | MACD | BOLLINGER_BANDS | STOCHASTIC",
+    )
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")
     initial_capital: float = 100_000.0

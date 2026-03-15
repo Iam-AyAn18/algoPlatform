@@ -221,11 +221,11 @@ def test_backtest_service():
 # ── Quote Cache ───────────────────────────────────────────────────────────────
 
 def test_quote_cache_ttl():
-    """Cached quotes are returned within TTL and evicted after expiry."""
+    """Cached quotes are returned within TTL; stale entries remain accessible but fresh check fails."""
     import datetime
     from app.services.market_data import (
-        _set_cached_quote, _get_cached_quote, clear_quote_cache,
-        QUOTE_CACHE_TTL_SECONDS,
+        _set_cache, _get_cache_entry, _is_fresh, _is_usable_stale,
+        clear_quote_cache, QUOTE_CACHE_TTL_SECONDS, QUOTE_STALE_LIMIT_SECONDS,
     )
     from app.models.schemas import QuoteResponse
 
@@ -236,25 +236,41 @@ def test_quote_cache_ttl():
         open=99.0, high=101.0, low=98.0, prev_close=99.0,
         change=1.0, change_pct=1.0, volume=1000,
     )
-    _set_cached_quote("CACHE_TEST", "NSE", dummy)
+    _set_cache("CACHE_TEST", "NSE", dummy)
 
-    # Should hit cache
-    cached = _get_cached_quote("CACHE_TEST", "NSE")
-    assert cached is not None
-    assert cached.symbol == "CACHE_TEST"
+    # Should be fresh right after insertion
+    entry = _get_cache_entry("CACHE_TEST", "NSE")
+    assert entry is not None
+    assert entry.quote.symbol == "CACHE_TEST"
+    assert _is_fresh(entry)
+    assert _is_usable_stale(entry)
 
-    # Expire via time-travel: manually set old timestamp
+    # Time-travel: set the cached_at to just past TTL
     from app.services import market_data as md
-    import threading
     key = "CACHE_TEST:NSE"
     with md._cache_lock:
-        quote, _ = md._quote_cache[key]
-        old_time = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - \
-                   datetime.timedelta(seconds=QUOTE_CACHE_TTL_SECONDS + 1)
-        md._quote_cache[key] = (quote, old_time)
+        entry_obj = md._quote_cache[key]
+        entry_obj.cached_at = (
+            datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            - datetime.timedelta(seconds=QUOTE_CACHE_TTL_SECONDS + 1)
+        )
 
-    # Should be evicted now
-    assert _get_cached_quote("CACHE_TEST", "NSE") is None
+    entry = _get_cache_entry("CACHE_TEST", "NSE")
+    assert entry is not None           # entry still present
+    assert not _is_fresh(entry)        # but no longer fresh
+    assert _is_usable_stale(entry)     # within stale window
+
+    # Time-travel: set the cached_at past the stale limit too
+    with md._cache_lock:
+        entry_obj = md._quote_cache[key]
+        entry_obj.cached_at = (
+            datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            - datetime.timedelta(seconds=QUOTE_STALE_LIMIT_SECONDS + 1)
+        )
+
+    entry = _get_cache_entry("CACHE_TEST", "NSE")
+    assert not _is_fresh(entry)
+    assert not _is_usable_stale(entry)
 
     clear_quote_cache()
 
@@ -428,3 +444,128 @@ def test_backtest_stochastic():
 
     assert result.final_value > 0
     assert result.strategy == "STOCHASTIC"
+
+
+# ── Market data fetch chain ───────────────────────────────────────────────────
+
+def test_nse_primary_source_used():
+    """When _fetch_from_nse returns a valid quote, get_quote uses it without hitting yfinance."""
+    import app.services.market_data as md
+    from app.models.schemas import QuoteResponse
+
+    fake_quote = QuoteResponse(
+        symbol="FAKENSESYM", exchange="NSE", name="Fake NSE", price=500.0,
+        open=498.0, high=505.0, low=495.0, prev_close=498.0,
+        change=2.0, change_pct=0.4, volume=100000,
+    )
+
+    orig_nse = md._fetch_from_nse
+    orig_yf = md._fetch_from_yfinance
+    yf_called = []
+
+    md._fetch_from_nse = lambda sym: fake_quote
+    md._fetch_from_yfinance = lambda sym, exch: yf_called.append(1) or None
+
+    md.clear_quote_cache()
+    try:
+        result = md.get_quote("FAKENSESYM", "NSE")
+        assert result.price == 500.0
+        assert result.name == "Fake NSE"
+        assert yf_called == []          # yfinance must NOT be called
+    finally:
+        md._fetch_from_nse = orig_nse
+        md._fetch_from_yfinance = orig_yf
+        md.clear_quote_cache()
+
+
+def test_yfinance_fallback_when_nse_fails():
+    """When _fetch_from_nse returns None, get_quote falls back to yfinance."""
+    import app.services.market_data as md
+    from app.models.schemas import QuoteResponse
+
+    fake_quote = QuoteResponse(
+        symbol="FAKEFB", exchange="NSE", name="FAKEFB", price=200.0,
+        open=198.0, high=202.0, low=197.0, prev_close=199.0,
+        change=1.0, change_pct=0.5, volume=50000,
+    )
+
+    orig_nse = md._fetch_from_nse
+    orig_yf = md._fetch_from_yfinance
+
+    md._fetch_from_nse = lambda sym: None           # NSE fails
+    md._fetch_from_yfinance = lambda sym, exch: fake_quote  # yfinance works
+
+    md.clear_quote_cache()
+    try:
+        result = md.get_quote("FAKEFB", "NSE")
+        assert result.price == 200.0
+    finally:
+        md._fetch_from_nse = orig_nse
+        md._fetch_from_yfinance = orig_yf
+        md.clear_quote_cache()
+
+
+def test_stale_cache_fallback_when_all_sources_fail():
+    """When both NSE and yfinance fail, get_quote returns the stale cached entry."""
+    import app.services.market_data as md
+    from app.models.schemas import QuoteResponse
+    import datetime
+
+    stale_quote = QuoteResponse(
+        symbol="STALEFB", exchange="NSE", name="STALEFB", price=300.0,
+        open=299.0, high=301.0, low=298.0, prev_close=299.0,
+        change=1.0, change_pct=0.33, volume=20000,
+    )
+
+    orig_nse = md._fetch_from_nse
+    orig_yf = md._fetch_from_yfinance
+
+    # Pre-load a stale entry (just past TTL but within stale limit)
+    md.clear_quote_cache()
+    md._set_cache("STALEFB", "NSE", stale_quote)
+    with md._cache_lock:
+        entry = md._quote_cache["STALEFB:NSE"]
+        entry.cached_at = (
+            datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            - datetime.timedelta(seconds=md.QUOTE_CACHE_TTL_SECONDS + 60)
+        )
+
+    md._fetch_from_nse = lambda sym: None
+    md._fetch_from_yfinance = lambda sym, exch: None
+
+    try:
+        result = md.get_quote("STALEFB", "NSE")
+        assert result.price == 300.0       # got stale data back
+    finally:
+        md._fetch_from_nse = orig_nse
+        md._fetch_from_yfinance = orig_yf
+        md.clear_quote_cache()
+
+
+def test_bse_skips_nse_primary():
+    """BSE quotes skip the NSE primary source and go straight to yfinance."""
+    import app.services.market_data as md
+    from app.models.schemas import QuoteResponse
+
+    fake_quote = QuoteResponse(
+        symbol="FAKEBSE", exchange="BSE", name="FAKEBSE", price=150.0,
+        open=148.0, high=152.0, low=147.0, prev_close=149.0,
+        change=1.0, change_pct=0.67, volume=10000,
+    )
+
+    orig_nse = md._fetch_from_nse
+    orig_yf = md._fetch_from_yfinance
+    nse_called = []
+
+    md._fetch_from_nse = lambda sym: nse_called.append(1) or fake_quote
+    md._fetch_from_yfinance = lambda sym, exch: fake_quote
+
+    md.clear_quote_cache()
+    try:
+        result = md.get_quote("FAKEBSE", "BSE")
+        assert result.price == 150.0
+        assert nse_called == []          # NSE primary must NOT be called for BSE
+    finally:
+        md._fetch_from_nse = orig_nse
+        md._fetch_from_yfinance = orig_yf
+        md.clear_quote_cache()

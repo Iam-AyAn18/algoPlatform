@@ -1,3 +1,5 @@
+import datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -30,7 +32,6 @@ async def reset_portfolio(db: AsyncSession = Depends(get_db)):
         port = Portfolio(id=1, cash=settings.initial_capital, initial_capital=settings.initial_capital)
         db.add(port)
     else:
-        import datetime
         port.cash = settings.initial_capital
         port.initial_capital = settings.initial_capital
         port.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)

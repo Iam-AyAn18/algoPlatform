@@ -67,10 +67,44 @@ def _run_macd(df: pd.DataFrame, params: dict) -> pd.Series:
     return signal
 
 
+# ── Bollinger Bands ───────────────────────────────────────────────────────────
+
+def _run_bollinger_bands(df: pd.DataFrame, params: dict) -> pd.Series:
+    period = int(params.get("period", 20))
+    std_dev = float(params.get("std_dev", 2.0))
+    sma = df["close"].rolling(period).mean()
+    std = df["close"].rolling(period).std(ddof=0)
+    upper = sma + std_dev * std
+    lower = sma - std_dev * std
+    signal = pd.Series(0, index=df.index)
+    signal[df["close"] < lower] = 1    # price below lower band → BUY
+    signal[df["close"] > upper] = -1   # price above upper band → SELL
+    return signal
+
+
+# ── Stochastic Oscillator ─────────────────────────────────────────────────────
+
+def _run_stochastic(df: pd.DataFrame, params: dict) -> pd.Series:
+    k_period = int(params.get("k_period", 14))
+    d_period = int(params.get("d_period", 3))
+    oversold = float(params.get("oversold", 20))
+    overbought = float(params.get("overbought", 80))
+    low_min = df["low"].rolling(k_period).min()
+    high_max = df["high"].rolling(k_period).max()
+    k = 100 * (df["close"] - low_min) / (high_max - low_min + 1e-9)
+    d = k.rolling(d_period).mean()
+    signal = pd.Series(0, index=df.index)
+    signal[(k < oversold) & (k > d)] = 1    # %K in oversold and crossing above %D
+    signal[(k > overbought) & (k < d)] = -1  # %K in overbought and crossing below %D
+    return signal
+
+
 STRATEGY_FNS = {
     "MA_CROSSOVER": _run_ma_crossover,
     "RSI": _run_rsi,
     "MACD": _run_macd,
+    "BOLLINGER_BANDS": _run_bollinger_bands,
+    "STOCHASTIC": _run_stochastic,
 }
 
 
@@ -185,3 +219,5 @@ def run_backtest(req: BacktestRequest) -> BacktestResult:
         trades=trades,
         equity_curve=equity_curve,
     )
+
+

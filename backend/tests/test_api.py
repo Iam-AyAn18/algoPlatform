@@ -216,3 +216,356 @@ def test_backtest_service():
     assert result.total_trades >= 0
     assert isinstance(result.equity_curve, list)
     assert len(result.equity_curve) > 0
+
+
+# ── Quote Cache ───────────────────────────────────────────────────────────────
+
+def test_quote_cache_ttl():
+    """Cached quotes are returned within TTL; stale entries remain accessible but fresh check fails."""
+    import datetime
+    from app.services.market_data import (
+        _set_cache, _get_cache_entry, _is_fresh, _is_usable_stale,
+        clear_quote_cache, QUOTE_CACHE_TTL_SECONDS, QUOTE_STALE_LIMIT_SECONDS,
+    )
+    from app.models.schemas import QuoteResponse
+
+    clear_quote_cache()
+
+    dummy = QuoteResponse(
+        symbol="CACHE_TEST", exchange="NSE", name="Cache Test", price=100.0,
+        open=99.0, high=101.0, low=98.0, prev_close=99.0,
+        change=1.0, change_pct=1.0, volume=1000,
+    )
+    _set_cache("CACHE_TEST", "NSE", dummy)
+
+    # Should be fresh right after insertion
+    entry = _get_cache_entry("CACHE_TEST", "NSE")
+    assert entry is not None
+    assert entry.quote.symbol == "CACHE_TEST"
+    assert _is_fresh(entry)
+    assert _is_usable_stale(entry)
+
+    # Time-travel: set the cached_at to just past TTL
+    from app.services import market_data as md
+    key = "CACHE_TEST:NSE"
+    with md._cache_lock:
+        entry_obj = md._quote_cache[key]
+        entry_obj.cached_at = (
+            datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            - datetime.timedelta(seconds=QUOTE_CACHE_TTL_SECONDS + 1)
+        )
+
+    entry = _get_cache_entry("CACHE_TEST", "NSE")
+    assert entry is not None           # entry still present
+    assert not _is_fresh(entry)        # but no longer fresh
+    assert _is_usable_stale(entry)     # within stale window
+
+    # Time-travel: set the cached_at past the stale limit too
+    with md._cache_lock:
+        entry_obj = md._quote_cache[key]
+        entry_obj.cached_at = (
+            datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            - datetime.timedelta(seconds=QUOTE_STALE_LIMIT_SECONDS + 1)
+        )
+
+    entry = _get_cache_entry("CACHE_TEST", "NSE")
+    assert not _is_fresh(entry)
+    assert not _is_usable_stale(entry)
+
+    clear_quote_cache()
+
+
+# ── SL Order ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_sl_order_rejected_without_trigger(client):
+    """SL orders without trigger_price should be REJECTED."""
+    payload = {
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "side": "SELL",
+        "order_type": "SL",
+        "quantity": 1,
+        # no trigger_price
+    }
+    resp = await client.post("/orders/", json=payload)
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "REJECTED"
+
+
+@pytest.mark.asyncio
+async def test_sl_order_field_in_response(client):
+    """OrderResponse includes trigger_price field."""
+    payload = {
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "quantity": 1,
+    }
+    resp = await client.post("/orders/", json=payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert "trigger_price" in data  # field present even if None
+
+
+# ── Portfolio Reset ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_portfolio_reset(client):
+    """POST /portfolio/reset returns a clean portfolio at initial capital."""
+    resp = await client.post("/portfolio/reset")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cash"] == data["initial_capital"]
+    assert data["positions"] == []
+    assert data["invested"] == 0.0
+
+
+# ── New Strategies ────────────────────────────────────────────────────────────
+
+def test_bollinger_bands_signal_logic():
+    """Bollinger Bands signal correctly detects price below lower band."""
+    import pandas as pd
+    import numpy as np
+    import app.services.strategy_service as ss
+
+    # Tightly clustered prices (small std) followed by a drop below the lower BB
+    rng = np.random.default_rng(42)
+    base = 200 + rng.normal(0, 0.2, 59)   # tiny variance → narrow bands
+    prices = np.concatenate([base, [185.0]])  # last price is well below lower band
+    dates = pd.date_range("2023-01-01", periods=len(prices), freq="B")
+    df = pd.DataFrame({"close": prices, "open": prices, "high": prices, "low": prices, "volume": 1000}, index=dates)
+
+    original = ss._df_from_bars
+    ss._df_from_bars = lambda sym, exch, period="6mo": df
+
+    result = ss.bollinger_bands_signal("TEST", "NSE", period=20, std_dev=2.0)
+    ss._df_from_bars = original
+
+    assert result.signal == "BUY"   # price dropped below lower band
+    assert result.strategy == "BOLLINGER_BANDS"
+    assert 0.0 <= result.confidence <= 1.0
+
+
+def test_stochastic_signal_logic():
+    """Stochastic signal returns a valid StrategySignal shape."""
+    import pandas as pd
+    import numpy as np
+    import app.services.strategy_service as ss
+
+    n = 60
+    np.random.seed(7)
+    prices = np.cumsum(np.random.randn(n)) + 200
+    dates = pd.date_range("2023-01-01", periods=n, freq="B")
+    df = pd.DataFrame({"close": prices, "open": prices, "high": prices * 1.01, "low": prices * 0.99, "volume": 1000}, index=dates)
+
+    original = ss._df_from_bars
+    ss._df_from_bars = lambda sym, exch, period="6mo": df
+
+    result = ss.stochastic_signal("TEST", "NSE")
+    ss._df_from_bars = original
+
+    assert result.signal in ("BUY", "SELL", "HOLD")
+    assert result.strategy == "STOCHASTIC"
+    assert 0.0 <= result.confidence <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_list_strategies_includes_new(client):
+    """GET /strategies/ includes BOLLINGER_BANDS and STOCHASTIC."""
+    resp = await client.get("/strategies/")
+    assert resp.status_code == 200
+    strategies = resp.json()
+    assert "BOLLINGER_BANDS" in strategies
+    assert "STOCHASTIC" in strategies
+
+
+def test_backtest_bollinger_bands():
+    """Backtest runs end-to-end with BOLLINGER_BANDS strategy."""
+    from app.services.backtest_service import run_backtest
+    from app.models.schemas import BacktestRequest
+    import pandas as pd
+    import numpy as np
+    import app.services.backtest_service as bs
+
+    n = 200
+    np.random.seed(10)
+    prices = np.cumsum(np.random.randn(n) * 3) + 300
+    dates = pd.date_range("2022-01-01", periods=n, freq="B")
+    df = pd.DataFrame({
+        "open": prices, "high": prices * 1.01, "low": prices * 0.99,
+        "close": prices, "volume": 10000,
+    }, index=dates)
+
+    original = bs._fetch_df
+    bs._fetch_df = lambda sym, exch, start, end: df
+
+    req = BacktestRequest(
+        symbol="TEST", exchange="NSE", strategy="BOLLINGER_BANDS",
+        start_date="2022-01-01", end_date="2022-12-31", initial_capital=100_000,
+        params={"period": 20, "std_dev": 2.0},
+    )
+    result = run_backtest(req)
+    bs._fetch_df = original
+
+    assert result.final_value > 0
+    assert result.strategy == "BOLLINGER_BANDS"
+    assert len(result.equity_curve) > 0
+
+
+def test_backtest_stochastic():
+    """Backtest runs end-to-end with STOCHASTIC strategy."""
+    from app.services.backtest_service import run_backtest
+    from app.models.schemas import BacktestRequest
+    import pandas as pd
+    import numpy as np
+    import app.services.backtest_service as bs
+
+    n = 200
+    np.random.seed(11)
+    prices = np.cumsum(np.random.randn(n) * 2) + 400
+    dates = pd.date_range("2022-01-01", periods=n, freq="B")
+    df = pd.DataFrame({
+        "open": prices, "high": prices * 1.01, "low": prices * 0.99,
+        "close": prices, "volume": 10000,
+    }, index=dates)
+
+    original = bs._fetch_df
+    bs._fetch_df = lambda sym, exch, start, end: df
+
+    req = BacktestRequest(
+        symbol="TEST", exchange="NSE", strategy="STOCHASTIC",
+        start_date="2022-01-01", end_date="2022-12-31", initial_capital=100_000,
+        params={"k_period": 14, "d_period": 3},
+    )
+    result = run_backtest(req)
+    bs._fetch_df = original
+
+    assert result.final_value > 0
+    assert result.strategy == "STOCHASTIC"
+
+
+# ── Market data fetch chain ───────────────────────────────────────────────────
+
+def test_nse_primary_source_used():
+    """When _fetch_from_nse returns a valid quote, get_quote uses it without hitting yfinance."""
+    import app.services.market_data as md
+    from app.models.schemas import QuoteResponse
+
+    fake_quote = QuoteResponse(
+        symbol="FAKENSESYM", exchange="NSE", name="Fake NSE", price=500.0,
+        open=498.0, high=505.0, low=495.0, prev_close=498.0,
+        change=2.0, change_pct=0.4, volume=100000,
+    )
+
+    orig_nse = md._fetch_from_nse
+    orig_yf = md._fetch_from_yfinance
+    yf_called = []
+
+    md._fetch_from_nse = lambda sym: fake_quote
+    md._fetch_from_yfinance = lambda sym, exch: yf_called.append(1) or None
+
+    md.clear_quote_cache()
+    try:
+        result = md.get_quote("FAKENSESYM", "NSE")
+        assert result.price == 500.0
+        assert result.name == "Fake NSE"
+        assert yf_called == []          # yfinance must NOT be called
+    finally:
+        md._fetch_from_nse = orig_nse
+        md._fetch_from_yfinance = orig_yf
+        md.clear_quote_cache()
+
+
+def test_yfinance_fallback_when_nse_fails():
+    """When _fetch_from_nse returns None, get_quote falls back to yfinance."""
+    import app.services.market_data as md
+    from app.models.schemas import QuoteResponse
+
+    fake_quote = QuoteResponse(
+        symbol="FAKEFB", exchange="NSE", name="FAKEFB", price=200.0,
+        open=198.0, high=202.0, low=197.0, prev_close=199.0,
+        change=1.0, change_pct=0.5, volume=50000,
+    )
+
+    orig_nse = md._fetch_from_nse
+    orig_yf = md._fetch_from_yfinance
+
+    md._fetch_from_nse = lambda sym: None           # NSE fails
+    md._fetch_from_yfinance = lambda sym, exch: fake_quote  # yfinance works
+
+    md.clear_quote_cache()
+    try:
+        result = md.get_quote("FAKEFB", "NSE")
+        assert result.price == 200.0
+    finally:
+        md._fetch_from_nse = orig_nse
+        md._fetch_from_yfinance = orig_yf
+        md.clear_quote_cache()
+
+
+def test_stale_cache_fallback_when_all_sources_fail():
+    """When both NSE and yfinance fail, get_quote returns the stale cached entry."""
+    import app.services.market_data as md
+    from app.models.schemas import QuoteResponse
+    import datetime
+
+    stale_quote = QuoteResponse(
+        symbol="STALEFB", exchange="NSE", name="STALEFB", price=300.0,
+        open=299.0, high=301.0, low=298.0, prev_close=299.0,
+        change=1.0, change_pct=0.33, volume=20000,
+    )
+
+    orig_nse = md._fetch_from_nse
+    orig_yf = md._fetch_from_yfinance
+
+    # Pre-load a stale entry (just past TTL but within stale limit)
+    md.clear_quote_cache()
+    md._set_cache("STALEFB", "NSE", stale_quote)
+    with md._cache_lock:
+        entry = md._quote_cache["STALEFB:NSE"]
+        entry.cached_at = (
+            datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            - datetime.timedelta(seconds=md.QUOTE_CACHE_TTL_SECONDS + 60)
+        )
+
+    md._fetch_from_nse = lambda sym: None
+    md._fetch_from_yfinance = lambda sym, exch: None
+
+    try:
+        result = md.get_quote("STALEFB", "NSE")
+        assert result.price == 300.0       # got stale data back
+    finally:
+        md._fetch_from_nse = orig_nse
+        md._fetch_from_yfinance = orig_yf
+        md.clear_quote_cache()
+
+
+def test_bse_skips_nse_primary():
+    """BSE quotes skip the NSE primary source and go straight to yfinance."""
+    import app.services.market_data as md
+    from app.models.schemas import QuoteResponse
+
+    fake_quote = QuoteResponse(
+        symbol="FAKEBSE", exchange="BSE", name="FAKEBSE", price=150.0,
+        open=148.0, high=152.0, low=147.0, prev_close=149.0,
+        change=1.0, change_pct=0.67, volume=10000,
+    )
+
+    orig_nse = md._fetch_from_nse
+    orig_yf = md._fetch_from_yfinance
+    nse_called = []
+
+    md._fetch_from_nse = lambda sym: nse_called.append(1) or fake_quote
+    md._fetch_from_yfinance = lambda sym, exch: fake_quote
+
+    md.clear_quote_cache()
+    try:
+        result = md.get_quote("FAKEBSE", "BSE")
+        assert result.price == 150.0
+        assert nse_called == []          # NSE primary must NOT be called for BSE
+    finally:
+        md._fetch_from_nse = orig_nse
+        md._fetch_from_yfinance = orig_yf
+        md.clear_quote_cache()

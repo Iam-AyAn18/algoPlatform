@@ -60,6 +60,8 @@ export default function BacktestPanel() {
             <option value="MA_CROSSOVER">MA Crossover</option>
             <option value="RSI">RSI</option>
             <option value="MACD">MACD</option>
+            <option value="BOLLINGER_BANDS">Bollinger Bands</option>
+            <option value="STOCHASTIC">Stochastic</option>
           </select>
         </div>
         <div>

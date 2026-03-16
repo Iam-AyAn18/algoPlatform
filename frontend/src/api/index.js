@@ -31,6 +31,9 @@ export const cancelOrder = (id) =>
 export const getPortfolio = () =>
   api.get('/portfolio/').then(r => r.data);
 
+export const resetPortfolio = () =>
+  api.post('/portfolio/reset').then(r => r.data);
+
 // Watchlist
 export const getWatchlist = () =>
   api.get('/watchlist/').then(r => r.data);

@@ -15,6 +15,14 @@ const SIGNAL_COLORS = {
   HOLD: 'border-yellow-500 bg-yellow-950',
 };
 
+const STRATEGIES = [
+  { value: 'MA_CROSSOVER', label: 'MA Crossover' },
+  { value: 'RSI', label: 'RSI' },
+  { value: 'MACD', label: 'MACD' },
+  { value: 'BOLLINGER_BANDS', label: 'Bollinger Bands' },
+  { value: 'STOCHASTIC', label: 'Stochastic' },
+];
+
 export default function StrategySignal() {
   const [form, setForm] = useState({ symbol: '', exchange: 'NSE', strategy: 'MA_CROSSOVER' });
   const [signal, setSignal] = useState(null);
@@ -47,9 +55,9 @@ export default function StrategySignal() {
           <option>NSE</option><option>BSE</option>
         </select>
         <select name="strategy" value={form.strategy} onChange={handleChange} className={inputCls}>
-          <option value="MA_CROSSOVER">MA Crossover</option>
-          <option value="RSI">RSI</option>
-          <option value="MACD">MACD</option>
+          {STRATEGIES.map(s => (
+            <option key={s.value} value={s.value}>{s.label}</option>
+          ))}
         </select>
         <button onClick={handleGet} disabled={loading}
           className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white rounded-lg px-4 py-2 text-sm transition-colors disabled:opacity-50">

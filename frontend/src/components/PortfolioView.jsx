@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { getPortfolio } from '../api';
-import { TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
+import { getPortfolio, resetPortfolio } from '../api';
+import { TrendingUp, TrendingDown, RefreshCw, RotateCcw } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 function StatCard({ label, value, sub, positive }) {
   return (
@@ -21,6 +22,7 @@ function StatCard({ label, value, sub, positive }) {
 export default function PortfolioView() {
   const [portfolio, setPortfolio] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -30,6 +32,20 @@ export default function PortfolioView() {
       // ignore
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleReset = async () => {
+    if (!window.confirm('Reset your paper trading account? All positions will be cleared and cash restored to the initial capital.')) return;
+    setResetting(true);
+    try {
+      const fresh = await resetPortfolio();
+      setPortfolio(fresh);
+      toast.success('Paper account reset – starting fresh!');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Reset failed');
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -44,9 +60,20 @@ export default function PortfolioView() {
     <div>
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-lg font-semibold text-white">Portfolio Summary</h2>
-        <button onClick={load} className="text-gray-400 hover:text-white transition-colors">
-          <RefreshCw size={16} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleReset}
+            disabled={resetting}
+            title="Reset paper trading account"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-900/60 hover:bg-red-800 text-red-300 hover:text-white transition-colors disabled:opacity-50"
+          >
+            <RotateCcw size={13} className={resetting ? 'animate-spin' : ''} />
+            Reset Account
+          </button>
+          <button onClick={load} className="text-gray-400 hover:text-white transition-colors">
+            <RefreshCw size={16} />
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">

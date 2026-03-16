@@ -10,6 +10,7 @@ export default function OrderPanel({ onOrderPlaced }) {
     order_type: 'MARKET',
     quantity: '',
     price: '',
+    trigger_price: '',
     strategy: '',
   });
   const [loading, setLoading] = useState(false);
@@ -19,6 +20,7 @@ export default function OrderPanel({ onOrderPlaced }) {
   const handleSubmit = async e => {
     e.preventDefault();
     if (!form.symbol || !form.quantity) return toast.error('Symbol and quantity are required');
+    if (form.order_type === 'SL' && !form.trigger_price) return toast.error('Trigger price is required for SL orders');
     setLoading(true);
     try {
       const payload = {
@@ -28,6 +30,8 @@ export default function OrderPanel({ onOrderPlaced }) {
         order_type: form.order_type,
         quantity: parseInt(form.quantity),
         ...(form.order_type === 'LIMIT' && form.price ? { price: parseFloat(form.price) } : {}),
+        ...(form.order_type === 'SL' && form.trigger_price ? { trigger_price: parseFloat(form.trigger_price) } : {}),
+        ...(form.order_type === 'SL' && form.price ? { price: parseFloat(form.price) } : {}),
         ...(form.strategy ? { strategy: form.strategy } : {}),
       };
       const result = await placeOrder(payload);
@@ -39,7 +43,7 @@ export default function OrderPanel({ onOrderPlaced }) {
         toast.success(`Order placed: ${result.status}`);
       }
       onOrderPlaced?.();
-      setForm(f => ({ ...f, symbol: '', quantity: '', price: '' }));
+      setForm(f => ({ ...f, symbol: '', quantity: '', price: '', trigger_price: '' }));
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to place order');
     } finally {
@@ -88,6 +92,7 @@ export default function OrderPanel({ onOrderPlaced }) {
           <select name="order_type" value={form.order_type} onChange={handleChange} className={inputCls}>
             <option value="MARKET">MARKET</option>
             <option value="LIMIT">LIMIT</option>
+            <option value="SL">STOP-LOSS (SL)</option>
           </select>
         </div>
       </div>
@@ -98,7 +103,7 @@ export default function OrderPanel({ onOrderPlaced }) {
           <input name="quantity" type="number" min="1" value={form.quantity}
             onChange={handleChange} placeholder="10" className={inputCls} />
         </div>
-        {form.order_type === 'LIMIT' && (
+        {(form.order_type === 'LIMIT' || form.order_type === 'SL') && (
           <div>
             <label className={labelCls}>Limit Price (₹)</label>
             <input name="price" type="number" step="0.01" value={form.price}
@@ -106,6 +111,19 @@ export default function OrderPanel({ onOrderPlaced }) {
           </div>
         )}
       </div>
+
+      {form.order_type === 'SL' && (
+        <div>
+          <label className={labelCls}>Trigger Price (₹) <span className="text-red-400">*</span></label>
+          <input name="trigger_price" type="number" step="0.01" value={form.trigger_price}
+            onChange={handleChange} placeholder="2480.00" className={inputCls} />
+          <p className="text-xs text-gray-500 mt-1">
+            {form.side === 'SELL'
+              ? 'Order executes when price falls to this level'
+              : 'Order executes when price rises to this level'}
+          </p>
+        </div>
+      )}
 
       <div>
         <label className={labelCls}>Strategy Tag (optional)</label>
@@ -119,7 +137,7 @@ export default function OrderPanel({ onOrderPlaced }) {
             ? 'bg-green-600 hover:bg-green-500 text-white'
             : 'bg-red-600 hover:bg-red-500 text-white'}
           disabled:opacity-50 disabled:cursor-not-allowed`}>
-        {loading ? 'Placing…' : `Place ${form.side} Order`}
+        {loading ? 'Placing…' : `Place ${form.side} ${form.order_type} Order`}
       </button>
     </form>
   );

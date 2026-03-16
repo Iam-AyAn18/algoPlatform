@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./algoplatform.db"
     initial_capital: float = 1_000_000.0  # ₹10 Lakh paper trading capital
 
+    # OpenAlgo broker integration settings (loaded from .env or environment variables)
+    openalgo_host: str = "http://127.0.0.1:5000"
+    openalgo_api_key: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

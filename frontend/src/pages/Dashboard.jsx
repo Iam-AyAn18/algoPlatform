@@ -8,6 +8,8 @@ import PortfolioView from '../components/PortfolioView';
 import OrderBook from '../components/OrderBook';
 import StrategySignal from '../components/StrategySignal';
 import BacktestPanel from '../components/BacktestPanel';
+import BrokerSettings from '../components/BrokerSettings';
+import AlgoTrader from '../components/AlgoTrader';
 import { RefreshCw, TrendingUp } from 'lucide-react';
 
 export default function Dashboard() {
@@ -51,6 +53,8 @@ export default function Dashboard() {
     { id: 'orders', label: 'Orders' },
     { id: 'strategies', label: 'Strategies' },
     { id: 'backtest', label: 'Backtest' },
+    { id: 'algo', label: 'Algo Trading' },
+    { id: 'broker', label: 'Broker' },
   ];
 
   return (
@@ -63,12 +67,12 @@ export default function Dashboard() {
               <TrendingUp size={16} className="text-white" />
             </div>
             <span className="font-bold text-white text-lg">AlgoPlatform</span>
-            <span className="text-xs bg-gray-800 text-gray-400 rounded px-2 py-0.5">NSE · BSE · Paper Trading</span>
+            <span className="text-xs bg-gray-800 text-gray-400 rounded px-2 py-0.5">NSE · BSE · OpenAlgo</span>
           </div>
-          <nav className="flex gap-1">
+          <nav className="flex gap-1 overflow-x-auto">
             {tabs.map(tab => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap
                   ${activeTab === tab.id
                     ? 'bg-green-600 text-white'
                     : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}>
@@ -165,7 +169,22 @@ export default function Dashboard() {
             <BacktestPanel />
           </div>
         )}
+
+        {/* Algo Trading Tab */}
+        {activeTab === 'algo' && (
+          <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
+            <AlgoTrader />
+          </div>
+        )}
+
+        {/* Broker Settings Tab */}
+        {activeTab === 'broker' && (
+          <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
+            <BrokerSettings />
+          </div>
+        )}
       </main>
     </div>
   );
 }
+

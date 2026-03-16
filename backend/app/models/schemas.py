@@ -1,9 +1,9 @@
 """Pydantic request/response schemas."""
 from __future__ import annotations
 import datetime
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from pydantic import BaseModel, Field
-from app.models.db_models import OrderSide, OrderStatus, OrderType
+from app.models.db_models import OrderSide, OrderStatus, OrderType, OrderMode
 
 
 # ── Market Data ──────────────────────────────────────────────────────────────
@@ -55,6 +55,8 @@ class OrderCreate(BaseModel):
         None, description="Required for SL orders – order executes when market price crosses this level"
     )
     strategy: Optional[str] = None
+    # If True and broker is configured, route to real broker; otherwise paper trade
+    use_broker: bool = Field(False, description="Execute via connected broker (real order)")
 
 
 class OrderResponse(BaseModel):
@@ -68,7 +70,9 @@ class OrderResponse(BaseModel):
     trigger_price: Optional[float]
     executed_price: Optional[float]
     status: OrderStatus
+    mode: OrderMode = OrderMode.PAPER
     strategy: Optional[str]
+    broker_order_id: Optional[str] = None
     created_at: datetime.datetime
     executed_at: Optional[datetime.datetime]
 
@@ -167,3 +171,79 @@ class BacktestResult(BaseModel):
     win_rate_pct: float
     trades: List[BacktestTrade]
     equity_curve: List[dict]
+
+
+# ── Broker Settings ───────────────────────────────────────────────────────────
+
+class BrokerSettingsUpdate(BaseModel):
+    host: str = Field("http://127.0.0.1:5000", description="OpenAlgo server URL")
+    api_key: str = Field("", description="OpenAlgo API key")
+    trade_mode: str = Field(
+        "paper",
+        description="paper | semi_auto | auto. "
+                    "paper=no real orders, semi_auto=queue for approval, auto=execute immediately",
+    )
+    default_product: str = Field("CNC", description="CNC | MIS | NRML")
+
+
+class BrokerSettingsResponse(BaseModel):
+    host: str
+    api_key_masked: str   # last 4 chars only for security
+    trade_mode: str
+    default_product: str
+    connected: bool
+    updated_at: datetime.datetime
+
+    model_config = {"from_attributes": True}
+
+
+class BrokerFundsResponse(BaseModel):
+    status: str
+    data: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+
+
+# ── Webhook / Algo Trading ────────────────────────────────────────────────────
+
+class WebhookPayload(BaseModel):
+    """Flexible payload from TradingView or any external alert system."""
+    symbol: str = Field(..., description="NSE/BSE ticker e.g. RELIANCE")
+    exchange: str = Field("NSE", description="NSE or BSE")
+    action: str = Field(..., description="BUY | SELL | EXIT")
+    quantity: int = Field(0, description="Number of shares (0 = use strategy default)")
+    price: Optional[float] = None
+    strategy: Optional[str] = None
+    # Webhook secret for basic authentication
+    secret: Optional[str] = Field(None, description="Webhook secret key for authentication")
+
+
+class WebhookSignalResponse(BaseModel):
+    id: int
+    source: str
+    symbol: str
+    exchange: str
+    action: str
+    quantity: int
+    price: Optional[float]
+    strategy: Optional[str]
+    processed: bool
+    order_id: Optional[int]
+    received_at: datetime.datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ActionCenterOrder(BaseModel):
+    """An order pending manual approval in the Action Center."""
+    id: int
+    symbol: str
+    exchange: str
+    side: OrderSide
+    order_type: OrderType
+    quantity: int
+    price: Optional[float]
+    strategy: Optional[str]
+    created_at: datetime.datetime
+
+    model_config = {"from_attributes": True}
+

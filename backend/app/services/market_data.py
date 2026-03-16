@@ -1,25 +1,21 @@
 """Market data service – multi-source with graceful fallback.
 
-Fetch chain:
+Fetch chain for live quotes:
   1. Fresh in-memory cache  (TTL = QUOTE_CACHE_TTL_SECONDS, default 5 min)
-  2. NSE India API via nsepython  (primary, NSE stocks only, no rate limits)
-  3. Yahoo Finance via yfinance    (fallback for BSE + when NSE API is down)
-  4. Stale cache                   (return last-known price if all fetches fail)
+  2. OpenAlgo broker API    (when host + api_key are configured)
+  3. NSE India API via nsepython  (primary free source, NSE stocks only)
+  4. Stale cache            (return last-known price if all fetches fail)
 
-Yahoo Finance issues (429 / empty data) are mitigated by:
-  - Removing the expensive tk.info / quoteSummary call that triggers 429
-  - Exponential backoff retries
-  - In-flight deduplication so only one goroutine fetches per symbol
+Historical OHLCV data:
+  1. OpenAlgo broker API    (when configured)
+  2. NSE India public historical API (direct HTTP, no Yahoo Finance)
 """
 from __future__ import annotations
 
 import datetime
 import logging
 import threading
-import time
-from typing import Dict, List, Optional, Tuple
-
-import yfinance as yf
+from typing import Dict, List, Optional
 
 from app.models.schemas import OHLCBar, QuoteResponse
 
@@ -27,12 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ── Cache configuration ───────────────────────────────────────────────────────
 
-# Time after which the cache entry is considered stale and a fresh fetch is
-# triggered.  5 minutes is a sensible default for a paper-trading app.
 QUOTE_CACHE_TTL_SECONDS: int = 300          # 5 minutes
-
-# How long to keep a stale entry as an emergency fallback when all live
-# sources return errors (e.g. both NSE API and Yahoo Finance are down).
 QUOTE_STALE_LIMIT_SECONDS: int = 3600      # 1 hour
 
 # ── Two-tier cache ────────────────────────────────────────────────────────────
@@ -48,8 +39,6 @@ class _CacheEntry:
 _quote_cache: Dict[str, _CacheEntry] = {}
 _cache_lock = threading.Lock()
 
-# Per-symbol in-flight lock: prevents thundering herd where many concurrent
-# requests for the same symbol each fire a separate network call.
 _inflight: Dict[str, threading.Event] = {}
 _inflight_lock = threading.Lock()
 
@@ -92,10 +81,7 @@ def clear_quote_cache() -> None:
 # ── NSE India API (primary for NSE stocks) ────────────────────────────────────
 
 def _fetch_from_nse(symbol: str) -> Optional[QuoteResponse]:
-    """Fetch a live NSE equity quote via nsepython (wraps NSE India's public API).
-
-    Returns None on any error so the caller can fall through to yfinance.
-    """
+    """Fetch a live NSE equity quote via nsepython (wraps NSE India's public API)."""
     try:
         from nsepython import nse_eq  # lazy import – optional dependency
 
@@ -105,7 +91,6 @@ def _fetch_from_nse(symbol: str) -> Optional[QuoteResponse]:
 
         price_info = data.get("priceInfo", {})
         info = data.get("info", {})
-        metadata = data.get("securityInfo", {})
 
         last_price = float(price_info.get("lastPrice") or price_info.get("close") or 0)
         prev_close = float(price_info.get("previousClose") or 0)
@@ -153,68 +138,19 @@ def _fetch_from_nse(symbol: str) -> Optional[QuoteResponse]:
         return None
 
 
-# ── Yahoo Finance (fallback) ──────────────────────────────────────────────────
+# ── OpenAlgo broker quote (optional) ─────────────────────────────────────────
 
-_YF_RETRY_DELAYS = (1.0, 3.0, 7.0)   # seconds between retries
-
-
-def _yf_symbol(symbol: str, exchange: str) -> str:
-    symbol = symbol.upper().strip()
-    if exchange.upper() == "BSE":
-        return f"{symbol}.BO"
-    return f"{symbol}.NS"
-
-
-def _fetch_from_yfinance(symbol: str, exchange: str) -> Optional[QuoteResponse]:
-    """Fetch via yfinance with exponential-backoff retry.
-
-    Critically, we only use ``fast_info`` (lightweight endpoint) and skip the
-    expensive ``tk.info`` / quoteSummary call that is the primary trigger of
-    Yahoo Finance 429 errors.  Company name and fundamental ratios are omitted
-    when this fallback is used.
-    """
-    ticker_sym = _yf_symbol(symbol, exchange)
-
-    last_exc: Optional[Exception] = None
-    for attempt, delay in enumerate((*_YF_RETRY_DELAYS, None)):
-        try:
-            tk = yf.Ticker(ticker_sym)
-            fast = tk.fast_info
-
-            prev_close = float(fast.previous_close or 0)
-            price = float(fast.last_price or prev_close)
-            open_ = float(fast.open or prev_close)
-            high = float(fast.day_high or price)
-            low = float(fast.day_low or price)
-            volume = int(fast.three_month_average_volume or 0)
-
-            change = price - prev_close
-            change_pct = (change / prev_close * 100) if prev_close else 0.0
-
-            return QuoteResponse(
-                symbol=symbol.upper(),
-                exchange=exchange.upper(),
-                name=symbol.upper(),       # avoid the expensive tk.info call
-                price=round(price, 2),
-                open=round(open_, 2),
-                high=round(high, 2),
-                low=round(low, 2),
-                prev_close=round(prev_close, 2),
-                change=round(change, 2),
-                change_pct=round(change_pct, 2),
-                volume=volume,
-            )
-        except Exception as exc:
-            last_exc = exc
-            if delay is not None:
-                logger.warning(
-                    "yfinance attempt %d for %s failed (%s), retrying in %.1fs",
-                    attempt + 1, ticker_sym, exc, delay,
-                )
-                time.sleep(delay)
-
-    logger.error("yfinance failed all retries for %s: %s", ticker_sym, last_exc)
-    return None
+def _fetch_from_broker(symbol: str, exchange: str) -> Optional[QuoteResponse]:
+    """Fetch via the configured OpenAlgo broker (if credentials are set)."""
+    from app.core.config import settings
+    if not settings.openalgo_api_key or not settings.openalgo_host:
+        return None
+    try:
+        from app.services.broker_service import get_quote_via_broker
+        return get_quote_via_broker(symbol, exchange, settings.openalgo_host, settings.openalgo_api_key)
+    except Exception as exc:
+        logger.debug("Broker quote fetch skipped: %s", exc)
+        return None
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -224,9 +160,9 @@ def get_quote(symbol: str, exchange: str = "NSE") -> QuoteResponse:
 
     Priority:
       1. Fresh cache hit → return immediately
-      2. NSE India API (NSE only)
-      3. Yahoo Finance with retry
-      4. Stale cache entry (up to 1 h old) with a warning flag in the name
+      2. OpenAlgo broker API (if configured)
+      3. NSE India API
+      4. Stale cache entry (up to 1 h old)
       5. Raise RuntimeError so the API layer can return 502
     """
     symbol = symbol.upper().strip()
@@ -238,37 +174,32 @@ def get_quote(symbol: str, exchange: str = "NSE") -> QuoteResponse:
     if entry and _is_fresh(entry):
         return entry.quote
 
-    # In-flight deduplication: if another thread is already fetching this
-    # symbol, wait for it to finish and then serve from cache.
+    # In-flight deduplication
     waiter_event: Optional[threading.Event] = None
     with _inflight_lock:
         if key in _inflight:
-            waiter_event = _inflight[key]   # we are a waiter
+            waiter_event = _inflight[key]
         else:
-            # we are the fetcher – register an event for other threads to wait on
             fetch_event = threading.Event()
             _inflight[key] = fetch_event
 
     if waiter_event is not None:
-        # We are a waiter: wait up to 15 s for the fetching thread.
         waiter_event.wait(timeout=15)
         entry = _get_cache_entry(symbol, exchange)
         if entry and _is_fresh(entry):
             return entry.quote
         if entry and _is_usable_stale(entry):
             return entry.quote
-        # fetcher failed or timed out; fall through to direct fetch below
 
     try:
         quote: Optional[QuoteResponse] = None
 
-        # 2. NSE India API (NSE only)
-        if exchange == "NSE":
-            quote = _fetch_from_nse(symbol)
+        # 2. OpenAlgo broker API (if configured)
+        quote = _fetch_from_broker(symbol, exchange)
 
-        # 3. Yahoo Finance (fallback)
-        if quote is None:
-            quote = _fetch_from_yfinance(symbol, exchange)
+        # 3. NSE India API (NSE only)
+        if quote is None and exchange == "NSE":
+            quote = _fetch_from_nse(symbol)
 
         if quote is not None:
             _set_cache(symbol, exchange, quote)
@@ -282,11 +213,9 @@ def get_quote(symbol: str, exchange: str = "NSE") -> QuoteResponse:
 
         raise RuntimeError(
             f"All data sources failed for {symbol}:{exchange}. "
-            "Check your network connection and try again later."
+            "Connect an OpenAlgo broker or check your network connection."
         )
     finally:
-        # Always signal waiting threads regardless of success/failure.
-        # Only the fetcher thread registered an event; waiters have no cleanup.
         if waiter_event is None:
             with _inflight_lock:
                 _inflight.pop(key, None)
@@ -299,39 +228,44 @@ def get_historical(
     period: str = "1y",
     interval: str = "1d",
 ) -> List[OHLCBar]:
-    """Fetch OHLCV bars from Yahoo Finance (best free source for Indian EOD data)."""
-    ticker_sym = _yf_symbol(symbol, exchange)
+    """Fetch OHLCV bars using NSE India API or OpenAlgo broker.
 
-    last_exc: Optional[Exception] = None
-    for attempt, delay in enumerate((*_YF_RETRY_DELAYS, None)):
+    Priority:
+      1. OpenAlgo broker API (if configured)
+      2. NSE India public historical API
+    """
+    from app.core.config import settings
+
+    # 1. OpenAlgo broker historical data
+    if settings.openalgo_api_key and settings.openalgo_host:
         try:
-            tk = yf.Ticker(ticker_sym)
-            df = tk.history(period=period, interval=interval, auto_adjust=True)
-            if df.empty:
-                return []
-            bars: List[OHLCBar] = []
-            for ts, row in df.iterrows():
-                bars.append(
-                    OHLCBar(
-                        timestamp=ts.to_pydatetime().replace(tzinfo=None),
-                        open=round(float(row["Open"]), 2),
-                        high=round(float(row["High"]), 2),
-                        low=round(float(row["Low"]), 2),
-                        close=round(float(row["Close"]), 2),
-                        volume=int(row["Volume"]),
-                    )
-                )
-            return bars
+            from app.services.broker_service import get_historical_via_broker
+            from app.services.nse_history import period_to_dates
+            start, end = period_to_dates(period)
+            bars = get_historical_via_broker(
+                symbol=symbol,
+                exchange=exchange,
+                start_date=start.strftime("%Y-%m-%d"),
+                end_date=end.strftime("%Y-%m-%d"),
+                interval=interval,
+                host=settings.openalgo_host,
+                api_key=settings.openalgo_api_key,
+            )
+            if bars:
+                return bars
         except Exception as exc:
-            last_exc = exc
-            if delay is not None:
-                logger.warning(
-                    "yfinance historical attempt %d for %s failed, retrying in %.1fs",
-                    attempt + 1, ticker_sym, delay,
-                )
-                time.sleep(delay)
+            logger.debug("Broker historical skipped: %s", exc)
 
-    logger.error("yfinance historical failed all retries for %s: %s", ticker_sym, last_exc)
+    # 2. NSE India public historical API (NSE stocks only)
+    try:
+        from app.services.nse_history import fetch_nse_historical, period_to_dates
+        start, end = period_to_dates(period)
+        bars = fetch_nse_historical(symbol=symbol, start=start, end=end)
+        if bars:
+            return bars
+    except Exception as exc:
+        logger.warning("NSE historical fetch failed for %s: %s", symbol, exc)
+
     return []
 
 
@@ -342,3 +276,4 @@ NIFTY50_SYMBOLS = [
     "LT", "BAJFINANCE", "ASIANPAINT", "AXISBANK", "MARUTI",
     "SUNPHARMA", "TITAN", "WIPRO", "ULTRACEMCO", "NESTLEIND",
 ]
+

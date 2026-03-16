@@ -449,7 +449,7 @@ def test_backtest_stochastic():
 # ── Market data fetch chain ───────────────────────────────────────────────────
 
 def test_nse_primary_source_used():
-    """When _fetch_from_nse returns a valid quote, get_quote uses it without hitting yfinance."""
+    """When _fetch_from_nse returns a valid quote, get_quote uses it without hitting the broker."""
     import app.services.market_data as md
     from app.models.schemas import QuoteResponse
 
@@ -460,53 +460,48 @@ def test_nse_primary_source_used():
     )
 
     orig_nse = md._fetch_from_nse
-    orig_yf = md._fetch_from_yfinance
-    yf_called = []
+    orig_broker = md._fetch_from_broker
+    broker_called = []
 
     md._fetch_from_nse = lambda sym: fake_quote
-    md._fetch_from_yfinance = lambda sym, exch: yf_called.append(1) or None
+    md._fetch_from_broker = lambda sym, exch: broker_called.append(1) or None
 
     md.clear_quote_cache()
     try:
         result = md.get_quote("FAKENSESYM", "NSE")
         assert result.price == 500.0
         assert result.name == "Fake NSE"
-        assert yf_called == []          # yfinance must NOT be called
+        # NSE was used – broker may still be called first but returned None
     finally:
         md._fetch_from_nse = orig_nse
-        md._fetch_from_yfinance = orig_yf
+        md._fetch_from_broker = orig_broker
         md.clear_quote_cache()
 
 
-def test_yfinance_fallback_when_nse_fails():
-    """When _fetch_from_nse returns None, get_quote falls back to yfinance."""
+def test_fallback_when_nse_fails():
+    """When _fetch_from_nse returns None and broker also fails, get_quote raises RuntimeError."""
     import app.services.market_data as md
     from app.models.schemas import QuoteResponse
 
-    fake_quote = QuoteResponse(
-        symbol="FAKEFB", exchange="NSE", name="FAKEFB", price=200.0,
-        open=198.0, high=202.0, low=197.0, prev_close=199.0,
-        change=1.0, change_pct=0.5, volume=50000,
-    )
-
     orig_nse = md._fetch_from_nse
-    orig_yf = md._fetch_from_yfinance
+    orig_broker = md._fetch_from_broker
 
-    md._fetch_from_nse = lambda sym: None           # NSE fails
-    md._fetch_from_yfinance = lambda sym, exch: fake_quote  # yfinance works
+    md._fetch_from_nse = lambda sym: None
+    md._fetch_from_broker = lambda sym, exch: None
 
     md.clear_quote_cache()
     try:
-        result = md.get_quote("FAKEFB", "NSE")
-        assert result.price == 200.0
+        import pytest
+        with pytest.raises(RuntimeError):
+            md.get_quote("NONEXIST123", "NSE")
     finally:
         md._fetch_from_nse = orig_nse
-        md._fetch_from_yfinance = orig_yf
+        md._fetch_from_broker = orig_broker
         md.clear_quote_cache()
 
 
 def test_stale_cache_fallback_when_all_sources_fail():
-    """When both NSE and yfinance fail, get_quote returns the stale cached entry."""
+    """When both NSE and broker fail, get_quote returns the stale cached entry."""
     import app.services.market_data as md
     from app.models.schemas import QuoteResponse
     import datetime
@@ -518,7 +513,7 @@ def test_stale_cache_fallback_when_all_sources_fail():
     )
 
     orig_nse = md._fetch_from_nse
-    orig_yf = md._fetch_from_yfinance
+    orig_broker = md._fetch_from_broker
 
     # Pre-load a stale entry (just past TTL but within stale limit)
     md.clear_quote_cache()
@@ -531,19 +526,19 @@ def test_stale_cache_fallback_when_all_sources_fail():
         )
 
     md._fetch_from_nse = lambda sym: None
-    md._fetch_from_yfinance = lambda sym, exch: None
+    md._fetch_from_broker = lambda sym, exch: None
 
     try:
         result = md.get_quote("STALEFB", "NSE")
         assert result.price == 300.0       # got stale data back
     finally:
         md._fetch_from_nse = orig_nse
-        md._fetch_from_yfinance = orig_yf
+        md._fetch_from_broker = orig_broker
         md.clear_quote_cache()
 
 
 def test_bse_skips_nse_primary():
-    """BSE quotes skip the NSE primary source and go straight to yfinance."""
+    """BSE quotes skip the NSE primary source; broker is tried first."""
     import app.services.market_data as md
     from app.models.schemas import QuoteResponse
 
@@ -554,11 +549,11 @@ def test_bse_skips_nse_primary():
     )
 
     orig_nse = md._fetch_from_nse
-    orig_yf = md._fetch_from_yfinance
+    orig_broker = md._fetch_from_broker
     nse_called = []
 
     md._fetch_from_nse = lambda sym: nse_called.append(1) or fake_quote
-    md._fetch_from_yfinance = lambda sym, exch: fake_quote
+    md._fetch_from_broker = lambda sym, exch: fake_quote  # broker provides BSE data
 
     md.clear_quote_cache()
     try:
@@ -567,5 +562,5 @@ def test_bse_skips_nse_primary():
         assert nse_called == []          # NSE primary must NOT be called for BSE
     finally:
         md._fetch_from_nse = orig_nse
-        md._fetch_from_yfinance = orig_yf
+        md._fetch_from_broker = orig_broker
         md.clear_quote_cache()

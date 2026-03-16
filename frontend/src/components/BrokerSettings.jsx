@@ -110,6 +110,13 @@ export default function BrokerSettings() {
     { id: 'orders', label: 'Broker Orders', icon: BookOpen },
   ];
 
+  function handleTabChange(tabId) {
+    setActiveTab(tabId);
+    if (tabId === 'funds') loadFunds();
+    else if (tabId === 'positions') loadPositions();
+    else if (tabId === 'orders') loadBrokerOrders();
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -140,7 +147,7 @@ export default function BrokerSettings() {
         {tabs.map(tab => {
           const Icon = tab.icon;
           return (
-            <button key={tab.id} onClick={() => { setActiveTab(tab.id); if (tab.id === 'funds') loadFunds(); if (tab.id === 'positions') loadPositions(); if (tab.id === 'orders') loadBrokerOrders(); }}
+            <button key={tab.id} onClick={() => handleTabChange(tab.id)}
               className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${activeTab === tab.id ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}>
               <Icon size={14} />{tab.label}
             </button>

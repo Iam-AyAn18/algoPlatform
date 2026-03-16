@@ -47,7 +47,7 @@ def _get_session() -> requests.Session:
     global _session, _session_created_at
     with _session_lock:
         now = time.time()
-        if _session is None or (_session_created_at and now - _session_created_at > _SESSION_TTL):
+        if _session is None or (_session_created_at is not None and now - _session_created_at > _SESSION_TTL):
             sess = requests.Session()
             sess.headers.update(_HEADERS)
             try:

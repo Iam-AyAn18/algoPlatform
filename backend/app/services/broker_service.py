@@ -111,8 +111,8 @@ def get_historical_via_broker(
             ts_raw = row.get("time") or row.get("date") or row.get("timestamp") or ""
             try:
                 if isinstance(ts_raw, str):
-                    # Accept both YYYY-MM-DD and YYYY-MM-DD HH:MM:SS formats
-                    ts = datetime.datetime.fromisoformat(ts_raw.split("T")[0])
+                    # Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS and similar ISO formats
+                    ts = datetime.datetime.fromisoformat(ts_raw.replace("T", " ").split(" ")[0])
                 elif isinstance(ts_raw, (int, float)):
                     ts = datetime.datetime.fromtimestamp(ts_raw)
                 else:

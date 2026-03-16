@@ -90,9 +90,8 @@ async def receive_webhook(
         qty = 1  # default to 1 share if not specified
 
     # Check broker settings to decide trade mode
-    from sqlalchemy import select as sa_select
     from app.models.db_models import BrokerSettings
-    broker_result = await db.execute(sa_select(BrokerSettings).where(BrokerSettings.id == 1))
+    broker_result = await db.execute(select(BrokerSettings).where(BrokerSettings.id == 1))
     broker_cfg = broker_result.scalar_one_or_none()
     trade_mode = broker_cfg.trade_mode if broker_cfg else "paper"
 

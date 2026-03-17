@@ -28,7 +28,7 @@ class OrderType(str, enum.Enum):
 
 class OrderMode(str, enum.Enum):
     PAPER = "PAPER"   # Simulated paper trade (default)
-    REAL = "REAL"     # Real order via OpenAlgo broker
+    REAL = "REAL"     # Real order via direct broker API (e.g. Zerodha Kite Connect)
 
 
 class Order(Base):
@@ -91,14 +91,30 @@ class Watchlist(Base):
 
 
 class BrokerSettings(Base):
-    """Stores OpenAlgo broker connection settings (single-row table, id=1)."""
+    """Stores direct broker connection credentials (single-row table, id=1).
+
+    No intermediate server required – the platform calls the broker API directly
+    using the credentials stored here.
+
+    Supported brokers:
+      zerodha  – Zerodha Kite Connect (api_key + api_secret + access_token)
+      paper    – No real broker; all trades are simulated
+    """
     __tablename__ = "broker_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    host: Mapped[str] = mapped_column(String(200), default="http://127.0.0.1:5000")
+    # Which broker to connect to: "zerodha" | "paper"
+    broker_name: Mapped[str] = mapped_column(String(30), default="paper")
+    # Zerodha Kite API key (from https://developers.kite.trade)
     api_key: Mapped[str] = mapped_column(String(200), default="")
+    # Zerodha Kite API secret (used to exchange request_token → access_token)
+    api_secret: Mapped[str] = mapped_column(String(200), default="")
+    # Daily access token – must be refreshed each trading day
+    access_token: Mapped[str] = mapped_column(String(500), default="")
+    # Zerodha user ID (e.g. "AB1234") – for display purposes
+    user_id: Mapped[str] = mapped_column(String(50), default="")
     # Trading mode: "paper" = simulate only, "semi_auto" = queue for approval,
-    # "auto" = execute real orders immediately via OpenAlgo
+    # "auto" = execute real orders immediately via the broker
     trade_mode: Mapped[str] = mapped_column(String(20), default="paper")
     # Default product type for real orders: CNC (delivery), MIS (intraday), NRML (F&O)
     default_product: Mapped[str] = mapped_column(String(10), default="CNC")

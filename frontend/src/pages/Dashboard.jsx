@@ -67,7 +67,7 @@ export default function Dashboard() {
               <TrendingUp size={16} className="text-white" />
             </div>
             <span className="font-bold text-white text-lg">AlgoPlatform</span>
-            <span className="text-xs bg-gray-800 text-gray-400 rounded px-2 py-0.5">NSE · BSE · OpenAlgo</span>
+            <span className="text-xs bg-gray-800 text-gray-400 rounded px-2 py-0.5">NSE · BSE · Zerodha Kite</span>
           </div>
           <nav className="flex gap-1 overflow-x-auto">
             {tabs.map(tab => (

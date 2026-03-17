@@ -176,8 +176,27 @@ class BacktestResult(BaseModel):
 # ── Broker Settings ───────────────────────────────────────────────────────────
 
 class BrokerSettingsUpdate(BaseModel):
-    host: str = Field("http://127.0.0.1:5000", description="OpenAlgo server URL")
-    api_key: str = Field("", description="OpenAlgo API key")
+    """Update direct broker credentials.
+
+    No intermediate server is required – the platform calls the broker API
+    directly using these credentials.
+
+    Currently supported brokers
+    ────────────────────────────
+      zerodha  Zerodha Kite Connect (https://developers.kite.trade)
+      paper    No real broker (default; paper trading only)
+    """
+    broker_name: str = Field("paper", description="zerodha | paper")
+    api_key: str = Field("", description="Broker API key (e.g. Zerodha Kite API key)")
+    api_secret: str = Field(
+        "",
+        description="Broker API secret (used to exchange request_token for access_token)",
+    )
+    access_token: str = Field(
+        "",
+        description="Daily access token – obtained via /broker/exchange-token or entered manually",
+    )
+    user_id: str = Field("", description="Broker user ID (e.g. Zerodha client ID like AB1234)")
     trade_mode: str = Field(
         "paper",
         description="paper | semi_auto | auto. "
@@ -187,8 +206,11 @@ class BrokerSettingsUpdate(BaseModel):
 
 
 class BrokerSettingsResponse(BaseModel):
-    host: str
-    api_key_masked: str   # last 4 chars only for security
+    broker_name: str
+    api_key_masked: str       # last 4 chars only for security
+    api_secret_set: bool      # True if api_secret has been configured
+    access_token_set: bool    # True if access_token has been configured
+    user_id: str
     trade_mode: str
     default_product: str
     connected: bool

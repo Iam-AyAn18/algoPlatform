@@ -7,11 +7,13 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./algoplatform.db"
     initial_capital: float = 1_000_000.0  # ₹10 Lakh paper trading capital
 
-    # OpenAlgo broker integration settings (loaded from .env or environment variables)
-    openalgo_host: str = "http://127.0.0.1:5000"
-    openalgo_api_key: str = ""
+    # Zerodha Kite Connect credentials (loaded from .env or environment variables)
+    # These are convenience env-var overrides; the UI stores credentials in the DB.
+    kite_api_key: str = ""
+    kite_access_token: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
+

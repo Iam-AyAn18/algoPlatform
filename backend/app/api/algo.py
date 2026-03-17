@@ -6,7 +6,7 @@ Webhook endpoint: POST /algo/webhook
   trade_mode configured in BrokerSettings:
     - paper     → paper-trade immediately
     - semi_auto → queue as PENDING_APPROVAL in Action Center
-    - auto      → execute real order via OpenAlgo immediately
+    - auto      → execute real order via broker API immediately
 
 Action Center endpoints: GET/POST /algo/action-center
   Let the user review and approve/reject orders queued in semi-auto mode.

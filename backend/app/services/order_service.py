@@ -74,8 +74,8 @@ async def place_order(order_in: OrderCreate, db: AsyncSession) -> OrderResponse:
         await db.refresh(order)
         return OrderResponse.model_validate(order)
 
-    # Auto mode with broker: place real order via OpenAlgo
-    if trade_mode == "auto" and order_in.use_broker and broker_cfg and broker_cfg.api_key:
+    # Auto mode with broker: place real order directly via the broker API
+    if trade_mode == "auto" and order_in.use_broker and broker_cfg and broker_cfg.api_key and broker_cfg.access_token:
         return await _place_real_order(order_in, broker_cfg, db)
 
     # Default: paper trading
@@ -87,7 +87,7 @@ async def _place_real_order(
     broker_cfg: BrokerSettings,
     db: AsyncSession,
 ) -> OrderResponse:
-    """Execute a real order via the OpenAlgo broker API."""
+    """Execute a real order directly via the broker API (no intermediary server)."""
     from app.services.broker_service import place_real_order as broker_place
 
     price_type_map = {
@@ -105,8 +105,9 @@ async def _place_real_order(
         price=order_in.price or 0.0,
         trigger_price=order_in.trigger_price or 0.0,
         strategy_tag=order_in.strategy or "",
-        host=broker_cfg.host,
+        broker_name=broker_cfg.broker_name,
         api_key=broker_cfg.api_key,
+        access_token=broker_cfg.access_token,
     )
 
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
@@ -233,8 +234,8 @@ async def approve_action_center_order(order_id: int, db: AsyncSession) -> OrderR
         raise ValueError(f"Order {order_id} is not pending approval (status={order.status})")
 
     broker_cfg = await _get_broker_settings(db)
-    if not broker_cfg or not broker_cfg.api_key:
-        raise ValueError("Broker not configured – cannot execute real order")
+    if not broker_cfg or not broker_cfg.api_key or not broker_cfg.access_token:
+        raise ValueError("Broker not configured – cannot execute real order (API key and access token required)")
 
     from app.services.broker_service import place_real_order as broker_place
 
@@ -254,8 +255,9 @@ async def approve_action_center_order(order_id: int, db: AsyncSession) -> OrderR
         price=order.price or 0.0,
         trigger_price=order.trigger_price or 0.0,
         strategy_tag=order.strategy or "",
-        host=broker_cfg.host,
+        broker_name=broker_cfg.broker_name,
         api_key=broker_cfg.api_key,
+        access_token=broker_cfg.access_token,
     )
 
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)

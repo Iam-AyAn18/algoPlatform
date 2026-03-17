@@ -2,12 +2,12 @@
 
 Fetch chain for live quotes:
   1. Fresh in-memory cache  (TTL = QUOTE_CACHE_TTL_SECONDS, default 5 min)
-  2. OpenAlgo broker API    (when host + api_key are configured)
+  2. Broker API (direct – Zerodha Kite Connect, no intermediary server)
   3. NSE India API via nsepython  (primary free source, NSE stocks only)
   4. Stale cache            (return last-known price if all fetches fail)
 
 Historical OHLCV data:
-  1. OpenAlgo broker API    (when configured)
+  1. Broker API direct (Zerodha Kite, when configured)
   2. NSE India public historical API (direct HTTP, no Yahoo Finance)
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime
 import logging
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from app.models.schemas import OHLCBar, QuoteResponse
 
@@ -41,6 +41,24 @@ _cache_lock = threading.Lock()
 
 _inflight: Dict[str, threading.Event] = {}
 _inflight_lock = threading.Lock()
+
+# ── Broker settings module-level cache (avoids DB round-trip per quote) ───────
+
+# Tuple of (broker_name, api_key, access_token) – refreshed by set_broker_credentials()
+_broker_credentials: Optional[Tuple[str, str, str]] = None
+_broker_creds_lock = threading.Lock()
+
+
+def set_broker_credentials(broker_name: str, api_key: str, access_token: str) -> None:
+    """Called by the broker API after saving settings so market_data picks them up."""
+    global _broker_credentials
+    with _broker_creds_lock:
+        _broker_credentials = (broker_name, api_key, access_token)
+
+
+def _get_broker_settings_cached() -> Optional[Tuple[str, str, str]]:
+    with _broker_creds_lock:
+        return _broker_credentials
 
 
 def _cache_key(symbol: str, exchange: str) -> str:
@@ -138,16 +156,22 @@ def _fetch_from_nse(symbol: str) -> Optional[QuoteResponse]:
         return None
 
 
-# ── OpenAlgo broker quote (optional) ─────────────────────────────────────────
+# ── Broker quote (optional, direct API) ──────────────────────────────────────
 
 def _fetch_from_broker(symbol: str, exchange: str) -> Optional[QuoteResponse]:
-    """Fetch via the configured OpenAlgo broker (if credentials are set)."""
-    from app.core.config import settings
-    if not settings.openalgo_api_key or not settings.openalgo_host:
-        return None
+    """Fetch directly from the configured broker API (no intermediary server)."""
     try:
+        from sqlalchemy import select
+        from app.models.db_models import BrokerSettings
+        # Use sync fallback: read cached broker settings from module-level cache
+        _bs = _get_broker_settings_cached()
+        if _bs is None:
+            return None
+        broker_name, api_key, access_token = _bs
+        if not api_key or not access_token:
+            return None
         from app.services.broker_service import get_quote_via_broker
-        return get_quote_via_broker(symbol, exchange, settings.openalgo_host, settings.openalgo_api_key)
+        return get_quote_via_broker(symbol, exchange, broker_name, api_key, access_token)
     except Exception as exc:
         logger.debug("Broker quote fetch skipped: %s", exc)
         return None
@@ -160,7 +184,7 @@ def get_quote(symbol: str, exchange: str = "NSE") -> QuoteResponse:
 
     Priority:
       1. Fresh cache hit → return immediately
-      2. OpenAlgo broker API (if configured)
+      2. Broker API (direct Zerodha Kite Connect, if configured)
       3. NSE India API
       4. Stale cache entry (up to 1 h old)
       5. Raise RuntimeError so the API layer can return 502
@@ -213,7 +237,7 @@ def get_quote(symbol: str, exchange: str = "NSE") -> QuoteResponse:
 
         raise RuntimeError(
             f"All data sources failed for {symbol}:{exchange}. "
-            "Connect an OpenAlgo broker or check your network connection."
+            "Connect a Zerodha broker account or check your network connection."
         )
     finally:
         if waiter_event is None:
@@ -228,33 +252,35 @@ def get_historical(
     period: str = "1y",
     interval: str = "1d",
 ) -> List[OHLCBar]:
-    """Fetch OHLCV bars using NSE India API or OpenAlgo broker.
+    """Fetch OHLCV bars using the broker API or NSE India public API.
 
     Priority:
-      1. OpenAlgo broker API (if configured)
+      1. Broker API direct (Zerodha Kite, when configured)
       2. NSE India public historical API
     """
-    from app.core.config import settings
-
-    # 1. OpenAlgo broker historical data
-    if settings.openalgo_api_key and settings.openalgo_host:
-        try:
-            from app.services.broker_service import get_historical_via_broker
-            from app.services.nse_history import period_to_dates
-            start, end = period_to_dates(period)
-            bars = get_historical_via_broker(
-                symbol=symbol,
-                exchange=exchange,
-                start_date=start.strftime("%Y-%m-%d"),
-                end_date=end.strftime("%Y-%m-%d"),
-                interval=interval,
-                host=settings.openalgo_host,
-                api_key=settings.openalgo_api_key,
-            )
-            if bars:
-                return bars
-        except Exception as exc:
-            logger.debug("Broker historical skipped: %s", exc)
+    # 1. Direct broker historical data (Zerodha Kite)
+    broker_creds = _get_broker_settings_cached()
+    if broker_creds:
+        broker_name, api_key, access_token = broker_creds
+        if api_key and access_token:
+            try:
+                from app.services.broker_service import get_historical_via_broker
+                from app.services.nse_history import period_to_dates
+                start, end = period_to_dates(period)
+                bars = get_historical_via_broker(
+                    symbol=symbol,
+                    exchange=exchange,
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=end.strftime("%Y-%m-%d"),
+                    interval=interval,
+                    broker_name=broker_name,
+                    api_key=api_key,
+                    access_token=access_token,
+                )
+                if bars:
+                    return bars
+            except Exception as exc:
+                logger.debug("Broker historical skipped: %s", exc)
 
     # 2. NSE India public historical API (NSE stocks only)
     try:

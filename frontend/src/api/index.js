@@ -55,7 +55,7 @@ export const getSignal = (symbol, exchange = 'NSE', strategy = 'MA_CROSSOVER', p
 export const runBacktest = (req) =>
   api.post('/backtest/', req).then(r => r.data);
 
-// Broker Settings (OpenAlgo integration)
+// Broker Settings – direct broker API integration (no intermediate server needed)
 export const getBrokerSettings = () =>
   api.get('/broker/settings').then(r => r.data);
 
@@ -64,6 +64,13 @@ export const updateBrokerSettings = (settings) =>
 
 export const testBrokerConnection = () =>
   api.post('/broker/test-connection').then(r => r.data);
+
+// Zerodha Kite login flow
+export const getBrokerLoginUrl = () =>
+  api.get('/broker/login-url').then(r => r.data);
+
+export const exchangeRequestToken = (requestToken) =>
+  api.post('/broker/exchange-token', null, { params: { request_token: requestToken } }).then(r => r.data);
 
 export const getBrokerFunds = () =>
   api.get('/broker/funds').then(r => r.data);

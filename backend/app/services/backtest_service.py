@@ -15,31 +15,34 @@ def _fetch_df(symbol: str, exchange: str, start: str, end: str) -> pd.DataFrame:
     """Fetch OHLCV data for backtesting.
 
     Priority:
-      1. OpenAlgo broker historical API (when configured)
+      1. Broker API direct (Zerodha Kite, when configured)
       2. NSE India public historical API
     """
-    from app.core.config import settings
-
     start_dt = datetime.date.fromisoformat(start)
     end_dt = datetime.date.fromisoformat(end)
 
-    # 1. OpenAlgo broker historical data
-    if settings.openalgo_api_key and settings.openalgo_host:
-        try:
-            from app.services.broker_service import get_historical_via_broker
-            bars = get_historical_via_broker(
-                symbol=symbol,
-                exchange=exchange,
-                start_date=start,
-                end_date=end,
-                interval="1d",
-                host=settings.openalgo_host,
-                api_key=settings.openalgo_api_key,
-            )
-            if bars:
-                return _bars_to_df(bars)
-        except Exception:
-            pass
+    # 1. Direct broker historical data (Zerodha Kite)
+    try:
+        from app.services.market_data import _get_broker_settings_cached
+        broker_creds = _get_broker_settings_cached()
+        if broker_creds:
+            broker_name, api_key, access_token = broker_creds
+            if api_key and access_token:
+                from app.services.broker_service import get_historical_via_broker
+                bars = get_historical_via_broker(
+                    symbol=symbol,
+                    exchange=exchange,
+                    start_date=start,
+                    end_date=end,
+                    interval="1d",
+                    broker_name=broker_name,
+                    api_key=api_key,
+                    access_token=access_token,
+                )
+                if bars:
+                    return _bars_to_df(bars)
+    except Exception:
+        pass
 
     # 2. NSE India public historical API
     bars = fetch_nse_historical(symbol=symbol, start=start_dt, end=end_dt)

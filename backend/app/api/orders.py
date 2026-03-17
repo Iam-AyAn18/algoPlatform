@@ -15,11 +15,11 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 async def create_order(order_in: OrderCreate, db: AsyncSession = Depends(get_db)):
     """Place a paper or real order.
 
-    Set ``use_broker=true`` to route through the configured OpenAlgo broker.
+    Set ``use_broker=true`` to route through the configured broker API.
     Behaviour depends on the broker's ``trade_mode`` setting:
       - paper      → always paper-trade regardless of use_broker
       - semi_auto  → queue for manual approval in Action Center
-      - auto       → execute real broker order immediately
+      - auto       → execute real broker order immediately via direct API
     """
     return await place_order(order_in, db)
 

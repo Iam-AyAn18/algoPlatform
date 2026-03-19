@@ -8,17 +8,67 @@ import pandas as pd
 import numpy as np
 
 from app.models.schemas import BacktestRequest, BacktestResult, BacktestTrade
-from app.services.market_data import get_historical, _yf_symbol
-import yfinance as yf
+from app.services.nse_history import fetch_nse_historical
 
 
 def _fetch_df(symbol: str, exchange: str, start: str, end: str) -> pd.DataFrame:
-    ticker_sym = _yf_symbol(symbol, exchange)
-    df = yf.download(ticker_sym, start=start, end=end, auto_adjust=True, progress=False)
-    if df.empty:
-        return df
-    df.columns = [c[0].lower() if isinstance(c, tuple) else c.lower() for c in df.columns]
+    """Fetch OHLCV data for backtesting.
+
+    Priority:
+      1. Broker API direct (Zerodha Kite, when configured)
+      2. NSE India public historical API
+    """
+    start_dt = datetime.date.fromisoformat(start)
+    end_dt = datetime.date.fromisoformat(end)
+
+    # 1. Direct broker historical data (Zerodha Kite)
+    try:
+        from app.services.market_data import _get_broker_settings_cached
+        broker_creds = _get_broker_settings_cached()
+        if broker_creds:
+            broker_name, api_key, access_token = broker_creds
+            if api_key and access_token:
+                from app.services.broker_service import get_historical_via_broker
+                bars = get_historical_via_broker(
+                    symbol=symbol,
+                    exchange=exchange,
+                    start_date=start,
+                    end_date=end,
+                    interval="1d",
+                    broker_name=broker_name,
+                    api_key=api_key,
+                    access_token=access_token,
+                )
+                if bars:
+                    return _bars_to_df(bars)
+    except Exception:
+        pass
+
+    # 2. NSE India public historical API
+    bars = fetch_nse_historical(symbol=symbol, start=start_dt, end=end_dt)
+    if bars:
+        return _bars_to_df(bars)
+
+    return pd.DataFrame()
+
+
+def _bars_to_df(bars) -> pd.DataFrame:
+    """Convert a list of OHLCBar objects to a DataFrame indexed by timestamp."""
+    records = [
+        {
+            "timestamp": b.timestamp,
+            "open": b.open,
+            "high": b.high,
+            "low": b.low,
+            "close": b.close,
+            "volume": b.volume,
+        }
+        for b in bars
+    ]
+    df = pd.DataFrame(records)
+    df = df.set_index("timestamp")
     df.index = pd.to_datetime(df.index)
+    df.sort_index(inplace=True)
     return df
 
 

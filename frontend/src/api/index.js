@@ -54,3 +54,49 @@ export const getSignal = (symbol, exchange = 'NSE', strategy = 'MA_CROSSOVER', p
 // Backtest
 export const runBacktest = (req) =>
   api.post('/backtest/', req).then(r => r.data);
+
+// Broker Settings – direct broker API integration (no intermediate server needed)
+export const getBrokerSettings = () =>
+  api.get('/broker/settings').then(r => r.data);
+
+export const updateBrokerSettings = (settings) =>
+  api.put('/broker/settings', settings).then(r => r.data);
+
+export const testBrokerConnection = () =>
+  api.post('/broker/test-connection').then(r => r.data);
+
+// Zerodha Kite login flow
+export const getBrokerLoginUrl = () =>
+  api.get('/broker/login-url').then(r => r.data);
+
+export const exchangeRequestToken = (requestToken) =>
+  api.post('/broker/exchange-token', null, { params: { request_token: requestToken } }).then(r => r.data);
+
+export const getBrokerFunds = () =>
+  api.get('/broker/funds').then(r => r.data);
+
+export const getBrokerPositions = () =>
+  api.get('/broker/positions').then(r => r.data);
+
+export const getBrokerOrders = () =>
+  api.get('/broker/orders').then(r => r.data);
+
+// Algo Trading – Webhook & Action Center
+export const sendWebhookSignal = (payload) =>
+  api.post('/algo/webhook', payload).then(r => r.data);
+
+export const listWebhookSignals = (limit = 50) =>
+  api.get('/algo/webhook/signals', { params: { limit } }).then(r => r.data);
+
+export const listActionCenterOrders = () =>
+  api.get('/algo/action-center').then(r => r.data);
+
+export const approveOrder = (orderId) =>
+  api.post(`/algo/action-center/${orderId}/approve`).then(r => r.data);
+
+export const rejectOrder = (orderId) =>
+  api.post(`/algo/action-center/${orderId}/reject`).then(r => r.data);
+
+export const approveAllOrders = () =>
+  api.post('/algo/action-center/approve-all').then(r => r.data);
+

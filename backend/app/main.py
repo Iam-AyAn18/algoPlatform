@@ -1,4 +1,5 @@
 """FastAPI application entry point."""
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -7,6 +8,18 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.api import market_data, orders, portfolio, strategies, watchlist, backtest
 from app.api import broker, algo
+from app.api import ws as ws_router
+
+
+async def _get_watchlist_symbols():
+    """Return the current list of watchlist symbol names from the database."""
+    from sqlalchemy import select
+    from app.core.database import AsyncSessionLocal
+    from app.models.db_models import Watchlist
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Watchlist.symbol))
+        return [row[0] for row in result.all()]
 
 
 @asynccontextmanager
@@ -26,7 +39,29 @@ async def lifespan(app: FastAPI):
                 set_broker_credentials(cfg.broker_name, cfg.api_key, cfg.access_token)
     except Exception:
         pass  # non-fatal; paper trading will work without broker credentials
+
+    # Start real-time background tasks.
+    from app.core.database import AsyncSessionLocal
+    from app.services.realtime_service import price_broadcaster, strategy_scanner
+
+    _price_task = asyncio.create_task(
+        price_broadcaster(_get_watchlist_symbols),
+        name="price_broadcaster",
+    )
+    _strategy_task = asyncio.create_task(
+        strategy_scanner(_get_watchlist_symbols, AsyncSessionLocal),
+        name="strategy_scanner",
+    )
+
     yield
+
+    # Graceful shutdown: cancel background tasks.
+    _price_task.cancel()
+    _strategy_task.cancel()
+    try:
+        await asyncio.gather(_price_task, _strategy_task, return_exceptions=True)
+    except Exception:
+        pass
 
 
 app = FastAPI(
@@ -57,6 +92,7 @@ app.include_router(watchlist.router)
 app.include_router(backtest.router)
 app.include_router(broker.router)
 app.include_router(algo.router)
+app.include_router(ws_router.router)
 
 
 @app.get("/", tags=["Health"])

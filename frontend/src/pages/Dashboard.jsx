@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getNifty50, getHistorical } from '../api';
+import { useWebSocket } from '../hooks/useWebSocket';
 import StockCard from '../components/StockCard';
 import PriceChart from '../components/PriceChart';
 import OrderPanel from '../components/OrderPanel';
@@ -10,7 +11,8 @@ import StrategySignal from '../components/StrategySignal';
 import BacktestPanel from '../components/BacktestPanel';
 import BrokerSettings from '../components/BrokerSettings';
 import AlgoTrader from '../components/AlgoTrader';
-import { RefreshCw, TrendingUp } from 'lucide-react';
+import { RefreshCw, TrendingUp, Radio } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export default function Dashboard() {
   const [niftyQuotes, setNiftyQuotes] = useState([]);
@@ -19,6 +21,27 @@ export default function Dashboard() {
   const [orderRefresh, setOrderRefresh] = useState(0);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loadingMarket, setLoadingMarket] = useState(true);
+
+  // Real-time WebSocket feed
+  const { prices: livePrices, connected: wsConnected, lastSignal } = useWebSocket();
+
+  // Merge live WS prices on top of the HTTP-fetched quote list.
+  const mergedQuotes = niftyQuotes.map((q) => {
+    const live = livePrices[q.symbol];
+    if (!live) return q;
+    return { ...q, ...live };
+  });
+
+  // Toast notifications for strategy signals arriving via WebSocket.
+  useEffect(() => {
+    if (!lastSignal) return;
+    const { symbol, signal, strategy, confidence } = lastSignal;
+    const emoji = signal === 'BUY' ? '🟢' : '🔴';
+    toast(
+      `${emoji} ${signal} signal on ${symbol}\n${strategy} · confidence ${(confidence * 100).toFixed(0)}%`,
+      { duration: 6000 }
+    );
+  }, [lastSignal]);
 
   const loadMarket = useCallback(async () => {
     setLoadingMarket(true);
@@ -68,6 +91,16 @@ export default function Dashboard() {
             </div>
             <span className="font-bold text-white text-lg">AlgoPlatform</span>
             <span className="text-xs bg-gray-800 text-gray-400 rounded px-2 py-0.5">NSE · BSE · Zerodha Kite</span>
+            {/* Live feed indicator */}
+            <span
+              title={wsConnected ? 'Real-time feed active' : 'Connecting to real-time feed…'}
+              className={`flex items-center gap-1 text-xs rounded px-2 py-0.5 ${
+                wsConnected ? 'bg-green-900/40 text-green-400' : 'bg-gray-800 text-gray-500'
+              }`}
+            >
+              <Radio size={10} className={wsConnected ? 'animate-pulse' : ''} />
+              {wsConnected ? 'Live' : 'Offline'}
+            </span>
           </div>
           <nav className="flex gap-1 overflow-x-auto">
             {tabs.map(tab => (
@@ -91,7 +124,10 @@ export default function Dashboard() {
             {/* Market Overview */}
             <div>
               <div className="flex justify-between items-center mb-3">
-                <h2 className="text-lg font-semibold text-white">Market Overview <span className="text-sm text-gray-500 font-normal">Nifty 50 Highlights</span></h2>
+                <h2 className="text-lg font-semibold text-white">
+                  Market Overview{' '}
+                  <span className="text-sm text-gray-500 font-normal">Nifty 50 Highlights</span>
+                </h2>
                 <button onClick={loadMarket} className="text-gray-400 hover:text-white transition-colors">
                   <RefreshCw size={16} className={loadingMarket ? 'animate-spin' : ''} />
                 </button>
@@ -101,9 +137,9 @@ export default function Dashboard() {
                   ? Array(5).fill(0).map((_, i) => (
                       <div key={i} className="bg-gray-800 rounded-xl p-4 animate-pulse h-28" />
                     ))
-                  : niftyQuotes.slice(0, 10).map(q => (
+                  : mergedQuotes.slice(0, 10).map(q => (
                       <div key={q.symbol} className="cursor-pointer" onClick={() => handleSelectSymbol(q.symbol, q.exchange)}>
-                        <StockCard quote={q} />
+                        <StockCard quote={q} live={!!livePrices[q.symbol]} />
                       </div>
                     ))
                 }

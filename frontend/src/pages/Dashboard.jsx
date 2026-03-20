@@ -11,6 +11,7 @@ import StrategySignal from '../components/StrategySignal';
 import BacktestPanel from '../components/BacktestPanel';
 import BrokerSettings from '../components/BrokerSettings';
 import AlgoTrader from '../components/AlgoTrader';
+import HelpGuide from '../components/HelpGuide';
 import { RefreshCw, TrendingUp, Radio } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -78,6 +79,7 @@ export default function Dashboard() {
     { id: 'backtest', label: 'Backtest' },
     { id: 'algo', label: 'Algo Trading' },
     { id: 'broker', label: 'Broker' },
+    { id: 'help', label: '? Help' },
   ];
 
   return (
@@ -217,6 +219,13 @@ export default function Dashboard() {
         {activeTab === 'broker' && (
           <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
             <BrokerSettings />
+          </div>
+        )}
+
+        {/* Help Tab */}
+        {activeTab === 'help' && (
+          <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
+            <HelpGuide />
           </div>
         )}
       </main>

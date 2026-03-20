@@ -7,12 +7,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/market': 'http://localhost:8000',
-      '/orders': 'http://localhost:8000',
-      '/portfolio': 'http://localhost:8000',
+      '/market':     'http://localhost:8000',
+      '/orders':     'http://localhost:8000',
+      '/portfolio':  'http://localhost:8000',
       '/strategies': 'http://localhost:8000',
-      '/watchlist': 'http://localhost:8000',
-      '/backtest': 'http://localhost:8000',
+      '/watchlist':  'http://localhost:8000',
+      '/backtest':   'http://localhost:8000',
+      '/broker':     'http://localhost:8000',
     },
   },
 })

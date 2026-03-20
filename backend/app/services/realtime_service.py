@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 # ── Tunable constants ─────────────────────────────────────────────────────────
 
-PRICE_POLL_INTERVAL: int = 15      # seconds between price refreshes
+PRICE_POLL_INTERVAL: int = 5       # seconds between price refreshes
 STRATEGY_SCAN_INTERVAL: int = 60   # seconds between strategy scans
 MAX_STRATEGY_SYMBOLS: int = 5      # max watchlist symbols per scan cycle
 
@@ -177,6 +177,11 @@ async def price_broadcaster(get_watchlist_symbols) -> None:
                     "data": prices,
                     "timestamp": _now(),
                 })
+                logger.info(
+                    "Price update broadcast – %d symbol(s): %s",
+                    len(prices),
+                    ", ".join(prices.keys()),
+                )
 
         except asyncio.CancelledError:
             logger.info("Price broadcaster cancelled")

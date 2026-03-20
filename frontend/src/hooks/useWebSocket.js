@@ -10,8 +10,10 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const WS_URL = BASE_URL.replace(/^http/, 'ws');   // http → ws, https → wss
+// Connect WebSocket directly to the backend (bypasses Vite proxy to avoid
+// noisy terminal errors when the backend isn't running).
+const _apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const WS_URL = _apiUrl.replace(/^http/, 'ws');
 
 const RECONNECT_DELAY_MS = 5_000;
 

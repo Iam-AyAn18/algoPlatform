@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ── Cache configuration ───────────────────────────────────────────────────────
 
-QUOTE_CACHE_TTL_SECONDS: int = 300          # 5 minutes
+QUOTE_CACHE_TTL_SECONDS: int = 4            # 4 seconds – must be < PRICE_POLL_INTERVAL (5 s)
 QUOTE_STALE_LIMIT_SECONDS: int = 3600      # 1 hour
 
 # ── Two-tier cache ────────────────────────────────────────────────────────────

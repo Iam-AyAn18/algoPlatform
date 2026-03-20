@@ -67,6 +67,101 @@ def _to_date_str(dt: datetime.date) -> str:
     return dt.strftime("%d-%m-%Y")
 
 
+_NSE_MAX_DAYS = 90   # NSE reliably serves up to ~90-day chunks; larger ranges get 404
+
+
+def _refresh_session() -> requests.Session:
+    """Force-create a brand-new NSE session with fresh cookies."""
+    global _session, _session_created_at
+    sess = requests.Session()
+    sess.headers.update(_HEADERS)
+    try:
+        sess.get(_NSE_BASE, timeout=10)
+        time.sleep(1)
+        sess.get(f"{_NSE_BASE}/get-quotes/equity?symbol=NIFTY", timeout=10)
+        time.sleep(0.5)
+    except Exception as exc:
+        logger.debug("NSE session priming failed (non-fatal): %s", exc)
+    with _session_lock:
+        _session = sess
+        _session_created_at = time.time()
+    return sess
+
+
+def _fetch_nse_chunk(
+    sess: requests.Session,
+    symbol: str,
+    start: datetime.date,
+    end: datetime.date,
+    series: str,
+) -> List[OHLCBar]:
+    """Fetch a single chunk (must be <= _NSE_MAX_DAYS) from NSE.
+    Retries once with a fresh session on 401/403/404 (stale cookie)."""
+    params = {
+        "series": f'["{series}"]',
+        "symbol": symbol.upper(),
+        "dateRange": "custom",
+        "from": _to_date_str(start),
+        "to": _to_date_str(end),
+    }
+    logger.debug("NSE historical request for %s: %s → %s", symbol, _to_date_str(start), _to_date_str(end))
+
+    for attempt in range(2):          # attempt 0 = normal, attempt 1 = fresh session
+        try:
+            resp = sess.get(_NSE_HIST_URL, params=params, timeout=15)
+            if resp.status_code in (401, 403, 404) and attempt == 0:
+                logger.debug(
+                    "NSE returned %s for %s – refreshing session and retrying",
+                    resp.status_code, symbol,
+                )
+                sess = _refresh_session()
+                time.sleep(1)
+                continue               # retry with new session
+            resp.raise_for_status()
+            payload = resp.json()
+            break
+        except Exception as exc:
+            if attempt == 0:
+                logger.debug("NSE chunk fetch failed for %s (attempt 1): %s – retrying", symbol, exc)
+                sess = _refresh_session()
+                time.sleep(1)
+                continue
+            logger.warning("NSE historical API error for %s: %s", symbol, exc)
+            return []
+    else:
+        return []
+
+    rows = payload.get("data", [])
+    if not rows:
+        logger.debug("NSE historical returned empty data for %s (%s→%s)", symbol, start, end)
+        return []
+
+    bars: List[OHLCBar] = []
+    for row in rows:
+        try:
+            raw_date = row.get("CH_TIMESTAMP", "")
+            ts = datetime.datetime.strptime(raw_date, "%d-%m-%Y")
+            open_ = float(row.get("CH_OPENING_PRICE") or row.get("CH_PREV_CLS_PRICE") or 0)
+            high = float(row.get("CH_TRADE_HIGH_PRICE") or open_)
+            low = float(row.get("CH_TRADE_LOW_PRICE") or open_)
+            close = float(row.get("CH_CLOSING_PRICE") or open_)
+            volume = int(row.get("CH_TOT_TRADED_QTY") or 0)
+            if close <= 0:
+                continue
+            bars.append(OHLCBar(
+                timestamp=ts,
+                open=round(open_, 2),
+                high=round(high, 2),
+                low=round(low, 2),
+                close=round(close, 2),
+                volume=volume,
+            ))
+        except Exception as exc:
+            logger.debug("Skipping malformed NSE row: %s – %s", row, exc)
+            continue
+    return bars
+
+
 def fetch_nse_historical(
     symbol: str,
     start: datetime.date,
@@ -75,63 +170,42 @@ def fetch_nse_historical(
 ) -> List[OHLCBar]:
     """Fetch daily OHLCV bars from NSE India's public API.
 
+    Automatically chunks requests longer than _NSE_MAX_DAYS days because
+    NSE's API returns 404 for date ranges >= 365 days.
+    The end date is also capped to yesterday – NSE rejects today/future dates.
+
     Returns an empty list on any error (callers should handle gracefully).
     """
-    sess = _get_session()
-    params = {
-        "series": f'["{series}"]',
-        "symbol": symbol.upper(),
-        "dateRange": "custom",
-        "from": _to_date_str(start),
-        "to": _to_date_str(end),
-    }
+    # NSE rejects today and future dates – cap to yesterday.
+    yesterday = datetime.date.today() - datetime.timedelta(days=1)
+    if end > yesterday:
+        logger.debug("NSE historical: capping end date from %s to %s (yesterday)", end, yesterday)
+        end = yesterday
 
-    try:
-        resp = sess.get(_NSE_HIST_URL, params=params, timeout=15)
-        resp.raise_for_status()
-        payload = resp.json()
-    except Exception as exc:
-        logger.warning("NSE historical API error for %s: %s", symbol, exc)
+    if start > end:
+        logger.debug("NSE historical: start %s is after end %s, returning empty", start, end)
         return []
 
-    rows = payload.get("data", [])
-    if not rows:
+    sess = _get_session()
+    all_bars: List[OHLCBar] = []
+
+    # Split into _NSE_MAX_DAYS-day chunks so we never hit the 404 range limit.
+    chunk_start = start
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + datetime.timedelta(days=_NSE_MAX_DAYS), end)
+        bars = _fetch_nse_chunk(sess, symbol, chunk_start, chunk_end, series)
+        all_bars.extend(bars)
+        chunk_start = chunk_end + datetime.timedelta(days=1)
+        if chunk_start <= end:
+            time.sleep(0.5)  # be polite to NSE between chunks
+
+    if not all_bars:
         logger.debug("NSE historical returned empty data for %s", symbol)
         return []
 
-    bars: List[OHLCBar] = []
-    for row in rows:
-        try:
-            # NSE API returns date as DD-MM-YYYY in CH_TIMESTAMP
-            raw_date = row.get("CH_TIMESTAMP", "")
-            ts = datetime.datetime.strptime(raw_date, "%d-%m-%Y")
-
-            open_ = float(row.get("CH_OPENING_PRICE") or row.get("CH_PREV_CLS_PRICE") or 0)
-            high = float(row.get("CH_TRADE_HIGH_PRICE") or open_)
-            low = float(row.get("CH_TRADE_LOW_PRICE") or open_)
-            close = float(row.get("CH_CLOSING_PRICE") or open_)
-            volume = int(row.get("CH_TOT_TRADED_QTY") or 0)
-
-            if close <= 0:
-                continue
-
-            bars.append(
-                OHLCBar(
-                    timestamp=ts,
-                    open=round(open_, 2),
-                    high=round(high, 2),
-                    low=round(low, 2),
-                    close=round(close, 2),
-                    volume=volume,
-                )
-            )
-        except Exception as exc:
-            logger.debug("Skipping malformed NSE row: %s – %s", row, exc)
-            continue
-
     # NSE returns newest-first; sort chronologically.
-    bars.sort(key=lambda b: b.timestamp)
-    return bars
+    all_bars.sort(key=lambda b: b.timestamp)
+    return all_bars
 
 
 def period_to_dates(period: str) -> tuple[datetime.date, datetime.date]:

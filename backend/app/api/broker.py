@@ -80,7 +80,7 @@ async def update_broker_settings(
     Empty strings for api_secret and access_token are **ignored** so existing
     values are preserved when you only want to change the trade_mode, for example.
     """
-    valid_brokers = {"zerodha", "paper"}
+    valid_brokers = {"zerodha", "groww", "paper"}
     if body.broker_name not in valid_brokers:
         raise HTTPException(status_code=400, detail=f"broker_name must be one of {valid_brokers}")
 
@@ -142,30 +142,48 @@ async def test_connection(db: AsyncSession = Depends(get_db)):
 
 @router.get("/login-url")
 async def get_login_url(db: AsyncSession = Depends(get_db)):
-    """Return the Zerodha Kite login URL.
+    """Return the broker login/authorisation URL.
 
-    The user must visit this URL in their browser, log in, and the page will
-    redirect them to the callback URL with a ``?request_token=...`` parameter.
-    They should then call POST /broker/exchange-token with that token.
+    - **Zerodha**: returns a Kite login URL; the callback delivers a
+      ``request_token``.  Use POST /broker/exchange-token to complete the flow.
+    - **Groww**: returns a Groww OAuth authorisation URL; the callback delivers
+      an ``auth_code`` (or ``code``).  Use POST /broker/exchange-token to
+      complete the flow.
     """
     cfg = await _get_or_create_settings(db)
-    if cfg.broker_name != "zerodha":
-        raise HTTPException(status_code=400, detail="Login URL is only available for the Zerodha broker")
-    if not cfg.api_key:
-        raise HTTPException(status_code=400, detail="API key not configured – save your Kite API key first")
-
-    from app.services.broker_service import get_kite_login_url
-    url = get_kite_login_url(cfg.api_key)
-    if not url:
-        raise HTTPException(status_code=503, detail="Failed to generate Kite login URL – is kiteconnect installed?")
-    return {
-        "login_url": url,
-        "instructions": (
-            "1. Visit the URL above in your browser and log in with your Zerodha credentials. "
-            "2. After login you are redirected to your app's redirect URL with a request_token parameter. "
-            "3. Copy the request_token value and call POST /broker/exchange-token with it."
-        ),
-    }
+    if cfg.broker_name == "zerodha":
+        if not cfg.api_key:
+            raise HTTPException(status_code=400, detail="API key not configured – save your Kite API key first")
+        from app.services.broker_service import get_kite_login_url
+        url = get_kite_login_url(cfg.api_key)
+        if not url:
+            raise HTTPException(status_code=503, detail="Failed to generate Kite login URL – is kiteconnect installed?")
+        return {
+            "login_url": url,
+            "broker": "zerodha",
+            "instructions": (
+                "1. Visit the URL above in your browser and log in with your Zerodha credentials. "
+                "2. After login you are redirected to your app's redirect URL with a request_token parameter. "
+                "3. Copy the request_token value and call POST /broker/exchange-token with it."
+            ),
+        }
+    if cfg.broker_name == "groww":
+        if not cfg.api_key:
+            raise HTTPException(status_code=400, detail="Client ID not configured – save your Groww Client ID (api_key) first")
+        from app.services.broker_service import get_groww_login_url
+        url = get_groww_login_url(cfg.api_key)
+        if not url:
+            raise HTTPException(status_code=503, detail="Failed to generate Groww login URL")
+        return {
+            "login_url": url,
+            "broker": "groww",
+            "instructions": (
+                "1. Visit the URL above in your browser and authorise the app with your Groww account. "
+                "2. After authorisation you are redirected with an auth_code (or code) parameter. "
+                "3. Copy the auth_code value and call POST /broker/exchange-token with it."
+            ),
+        }
+    raise HTTPException(status_code=400, detail="Login URL is only available for zerodha or groww brokers")
 
 
 @router.post("/exchange-token")
@@ -173,25 +191,39 @@ async def exchange_token(
     request_token: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Exchange a Kite request_token for a daily access_token.
+    """Exchange a broker auth code / request_token for a daily access_token.
 
-    The request_token comes from the ``?request_token=...`` query parameter
-    after the Zerodha login redirect.  The access_token is stored automatically
-    and is valid until midnight IST.
+    - **Zerodha**: ``request_token`` is from the ``?request_token=...`` redirect parameter.
+    - **Groww**: ``request_token`` is the ``auth_code`` (or ``code``) from the OAuth redirect.
+
+    The access_token is stored automatically.
     """
     cfg = await _get_or_create_settings(db)
-    if cfg.broker_name != "zerodha":
-        raise HTTPException(status_code=400, detail="Token exchange is only available for the Zerodha broker")
-    if not cfg.api_key or not cfg.api_secret:
-        raise HTTPException(status_code=400, detail="API key and API secret must be configured first")
 
-    from app.services.broker_service import exchange_request_token
-    access_token = exchange_request_token(cfg.api_key, cfg.api_secret, request_token)
-    if not access_token:
-        raise HTTPException(
-            status_code=400,
-            detail="Token exchange failed – ensure the request_token is correct and not expired",
-        )
+    if cfg.broker_name == "zerodha":
+        if not cfg.api_key or not cfg.api_secret:
+            raise HTTPException(status_code=400, detail="API key and API secret must be configured first")
+        from app.services.broker_service import exchange_request_token
+        access_token = exchange_request_token(cfg.api_key, cfg.api_secret, request_token)
+        if not access_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Token exchange failed – ensure the request_token is correct and not expired",
+            )
+
+    elif cfg.broker_name == "groww":
+        if not cfg.api_key or not cfg.api_secret:
+            raise HTTPException(status_code=400, detail="Client ID (api_key) and Client Secret (api_secret) must be configured first")
+        from app.services.broker_service import exchange_groww_auth_code
+        access_token = exchange_groww_auth_code(cfg.api_key, cfg.api_secret, request_token)
+        if not access_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Groww token exchange failed – ensure the auth_code is correct and not expired",
+            )
+
+    else:
+        raise HTTPException(status_code=400, detail="Token exchange is only available for zerodha or groww brokers")
 
     cfg.access_token = access_token
     cfg.connected = True
@@ -205,7 +237,8 @@ async def exchange_token(
     await db.refresh(cfg)
     return {
         "connected": True,
-        "message": "Access token saved. Broker is now connected for today's session.",
+        "broker": cfg.broker_name,
+        "message": "Access token saved. Broker is now connected.",
     }
 
 

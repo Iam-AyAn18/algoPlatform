@@ -186,7 +186,7 @@ class BrokerSettingsUpdate(BaseModel):
       zerodha  Zerodha Kite Connect (https://developers.kite.trade)
       paper    No real broker (default; paper trading only)
     """
-    broker_name: str = Field("paper", description="zerodha | paper")
+    broker_name: str = Field("paper", description="zerodha | groww | paper")
     api_key: str = Field("", description="Broker API key (e.g. Zerodha Kite API key)")
     api_secret: str = Field(
         "",

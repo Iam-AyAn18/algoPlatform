@@ -15,8 +15,10 @@ const SECTIONS = [
           <span className="font-semibold text-white">AlgoPlatform</span> is an open-source
           algorithmic trading platform for NSE &amp; BSE stocks. It ships with{' '}
           <span className="text-green-400">paper trading</span> (virtual ₹10 Lakh, no real
-          money), live market data, strategy signals, backtesting, and optional Zerodha Kite
-          Connect integration for real orders.
+          money), live market data, strategy signals, backtesting, and optional broker
+          integration for real orders —{' '}
+          <span className="text-white">Zerodha Kite Connect</span> and{' '}
+          <span className="text-green-400">Groww</span> are both supported.
         </p>
 
         <div>
@@ -105,7 +107,7 @@ const SECTIONS = [
       <div className="space-y-3 text-sm text-gray-300">
         <p>
           All orders are <span className="text-green-400">paper trades</span> by default —
-          virtual money only. Connect a Zerodha account in the <strong>Broker</strong> tab for
+          virtual money only. Connect a Zerodha or Groww account in the <strong>Broker</strong> tab for
           real orders.
         </p>
 
@@ -242,7 +244,10 @@ const SECTIONS = [
       <div className="space-y-3 text-sm text-gray-300">
         <p>
           The <span className="text-white font-semibold">Backtest</span> tab lets you simulate a
-          strategy on historical price data to see how it would have performed.
+          strategy on historical price data to see how it would have performed. Historical data
+          is sourced from the <span className="text-white">Zerodha Kite API</span> when connected,
+          or the <span className="text-white">NSE India public API</span> otherwise (including
+          Groww accounts and paper mode).
         </p>
 
         <div>
@@ -310,7 +315,7 @@ const SECTIONS = [
           <ul className="list-disc list-inside space-y-1 text-gray-400">
             <li><span className="text-white">paper</span> — signal processed as a paper trade only.</li>
             <li><span className="text-white">semi_auto</span> — signal queued in <em>Action Center</em> for manual review.</li>
-            <li><span className="text-white">auto</span> — real order placed immediately via Zerodha (requires broker connection).</li>
+            <li><span className="text-white">auto</span> — real order placed immediately via your connected broker (Zerodha or Groww).</li>
           </ul>
         </div>
 
@@ -345,36 +350,58 @@ const SECTIONS = [
   {
     id: 'broker',
     icon: <Settings size={16} />,
-    title: 'Zerodha Broker Setup',
+    title: 'Broker Setup (Zerodha & Groww)',
     content: (
-      <div className="space-y-3 text-sm text-gray-300">
+      <div className="space-y-4 text-sm text-gray-300">
         <p>
-          AlgoPlatform connects <strong>directly</strong> to the Zerodha Kite Connect REST API —
-          no intermediate server required. This is optional; the platform works fully in paper
-          mode without a broker.
+          AlgoPlatform connects <strong>directly</strong> to your broker's REST API —
+          no intermediate server required. Both <span className="text-white">Zerodha Kite Connect</span>{' '}
+          and <span className="text-green-400">Groww</span> are supported. The platform works
+          fully in paper mode without any broker connection.
         </p>
 
+        {/* Zerodha */}
         <div>
-          <p className="font-semibold text-white mb-1">One-time setup</p>
+          <p className="font-semibold text-white mb-1 flex items-center gap-1.5">
+            🟥 Zerodha Kite Connect
+          </p>
           <ol className="list-decimal list-inside space-y-1 text-gray-400">
-            <li>Create an app at <code className="text-blue-400">developers.kite.trade</code> → get API Key &amp; Secret.</li>
-            <li>In the <strong>Broker</strong> tab, enter your API Key, API Secret, and Client ID.</li>
-            <li>Click <em>Get Login URL</em> → log in with Zerodha credentials.</li>
-            <li>The access token is saved automatically.</li>
+            <li>Create an app at <code className="text-blue-400">developers.kite.trade</code> → copy your <strong className="text-white">API Key</strong> &amp; <strong className="text-white">API Secret</strong>.</li>
+            <li>In the <strong>Broker</strong> tab, select <em>Zerodha Kite</em>, enter API Key, API Secret, and your Client ID.</li>
+            <li>Click <em>Get Login URL</em> → log in with your Zerodha credentials in the browser.</li>
+            <li>Copy the <code className="text-green-400">request_token</code> from the redirect URL and paste it into the token exchange box.</li>
+            <li>Click <em>Get Access Token</em> — the token is saved automatically.</li>
           </ol>
+          <p className="mt-1.5 text-xs text-yellow-400/80">
+            ⚠️ Zerodha access tokens expire at midnight IST. Repeat the login flow each trading day.
+          </p>
+          <p className="mt-1 text-xs text-gray-400">
+            Historical price data is fetched directly from the Kite historical data API when connected.
+          </p>
         </div>
 
+        {/* Groww */}
         <div>
-          <p className="font-semibold text-white mb-1">Daily token refresh</p>
-          <p className="text-gray-400 text-xs">
-            Zerodha access tokens expire at midnight IST. Each trading day, click{' '}
-            <em>Get Login URL</em> in the Broker tab and log in again to refresh your token.
+          <p className="font-semibold text-white mb-1 flex items-center gap-1.5">
+            🟢 Groww Developer API
+          </p>
+          <ol className="list-decimal list-inside space-y-1 text-gray-400">
+            <li>Register your app at <a href="https://groww.in/open-api" target="_blank" rel="noopener noreferrer" className="text-green-400 underline">groww.in/open-api</a> → copy your <strong className="text-white">Client ID</strong> (use as API Key) &amp; <strong className="text-white">Client Secret</strong>.</li>
+            <li>In the <strong>Broker</strong> tab, select <em>Groww</em>, enter your Client ID and Client Secret.</li>
+            <li>Click <em>Get Login URL</em> → authorize the app in the browser with your Groww account.</li>
+            <li>Copy the <code className="text-green-400">auth_code</code> from the redirect URL and paste it into the token exchange box.</li>
+            <li>Click <em>Get Access Token</em> — the access token is saved automatically.</li>
+          </ol>
+          <p className="mt-1.5 text-xs text-gray-400">
+            ℹ️ Groww does not provide a public historical data API. Charts and backtests automatically
+            use the <strong className="text-white">NSE India public API</strong> as the data source —
+            no extra configuration needed.
           </p>
         </div>
 
         <div className="bg-gray-800 rounded-lg p-3 text-xs text-gray-400">
-          ⚠️ <strong>Disclaimer:</strong> Real-money trading via Zerodha is entirely at your
-          own risk. Always test in paper mode first.
+          ⚠️ <strong>Disclaimer:</strong> Real-money trading via any broker is entirely at your
+          own risk. Always test thoroughly in paper mode first.
         </div>
       </div>
     ),

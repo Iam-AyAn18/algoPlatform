@@ -98,6 +98,7 @@ class BrokerSettings(Base):
 
     Supported brokers:
       zerodha  – Zerodha Kite Connect (api_key + api_secret + access_token)
+      groww    – Groww Developer API (api_key=client_id, api_secret=client_secret, access_token)
       paper    – No real broker; all trades are simulated
     """
     __tablename__ = "broker_settings"

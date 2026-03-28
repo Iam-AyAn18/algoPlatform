@@ -14,6 +14,7 @@ export default defineConfig({
       '/watchlist':  'http://localhost:8000',
       '/backtest':   'http://localhost:8000',
       '/broker':     'http://localhost:8000',
+      '/algo':       'http://localhost:8000',
     },
   },
 })

@@ -24,9 +24,9 @@ const PRODUCTS = [
 export default function BrokerSettings() {
   const [form, setForm] = useState({
     broker_name: 'paper', api_key: '', api_secret: '', access_token: '',
-    user_id: '', trade_mode: 'paper', default_product: 'CNC',
+    user_id: '', trade_mode: 'paper', default_product: 'CNC', is_live_trading: false,
   });
-  const [serverState, setServerState] = useState({ connected: false, api_key_masked: '', api_secret_set: false, access_token_set: false, user_id: '' });
+  const [serverState, setServerState] = useState({ connected: false, api_key_masked: '', api_secret_set: false, access_token_set: false, user_id: '', is_live_trading: false });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [loginUrl, setLoginUrl] = useState('');
@@ -48,6 +48,7 @@ export default function BrokerSettings() {
         user_id: data.user_id || '',
         trade_mode: data.trade_mode || 'paper',
         default_product: data.default_product || 'CNC',
+        is_live_trading: data.is_live_trading || false,
         // Never prefill secrets; user must re-enter to change
         api_key: '', api_secret: '', access_token: '',
       }));
@@ -420,6 +421,29 @@ export default function BrokerSettings() {
                   </div>
                 </label>
               ))}
+            </div>
+          </div>
+
+          {/* Live Trading Safety Gate */}
+          <div className="p-3 rounded-lg border border-gray-700 bg-gray-800">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-white">Live Trading Mode</div>
+                <div className="text-xs text-gray-400 mt-0.5">
+                  {form.is_live_trading
+                    ? '⚠️ Real orders CAN be sent to your broker'
+                    : '🛡️ Analysis mode – real orders are blocked (safe default)'}
+                </div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.is_live_trading}
+                  onChange={e => setForm(f => ({ ...f, is_live_trading: e.target.checked }))}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-700 peer-focus:ring-2 peer-focus:ring-red-500 rounded-full peer peer-checked:bg-red-600 transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+              </label>
             </div>
           </div>
 

@@ -203,6 +203,10 @@ class BrokerSettingsUpdate(BaseModel):
                     "paper=no real orders, semi_auto=queue for approval, auto=execute immediately",
     )
     default_product: str = Field("CNC", description="CNC | MIS | NRML")
+    is_live_trading: bool = Field(
+        False,
+        description="Safety gate. False=Analysis mode (no real orders sent), True=Live Trading mode",
+    )
 
 
 class BrokerSettingsResponse(BaseModel):
@@ -214,6 +218,7 @@ class BrokerSettingsResponse(BaseModel):
     trade_mode: str
     default_product: str
     connected: bool
+    is_live_trading: bool     # False=Analysis mode, True=Live Trading mode
     updated_at: datetime.datetime
 
     model_config = {"from_attributes": True}

@@ -56,6 +56,7 @@ def _cfg_to_response(cfg: BrokerSettings) -> BrokerSettingsResponse:
         trade_mode=cfg.trade_mode,
         default_product=cfg.default_product,
         connected=cfg.connected,
+        is_live_trading=cfg.is_live_trading,
         updated_at=cfg.updated_at,
     )
 
@@ -104,6 +105,7 @@ async def update_broker_settings(
         cfg.user_id = body.user_id
     cfg.trade_mode = body.trade_mode
     cfg.default_product = body.default_product.upper()
+    cfg.is_live_trading = body.is_live_trading
     cfg.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
     # Test connection if we have the required credentials
@@ -138,7 +140,36 @@ async def test_connection(db: AsyncSession = Depends(get_db)):
     }
 
 
-# ── Zerodha Kite login flow ───────────────────────────────────────────────────
+# ── Trading mode toggle ───────────────────────────────────────────────────────
+
+@router.post("/trading-mode")
+async def set_trading_mode(
+    is_live_trading: bool,
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle between **Analysis** mode and **Live Trading** mode.
+
+    - ``is_live_trading=false`` (default) → **Analysis mode**: market data,
+      backtesting, and paper orders work normally; real broker orders are
+      **blocked** as a safety measure.
+    - ``is_live_trading=true`` → **Live Trading mode**: real broker orders
+      are allowed (subject to the broker's ``trade_mode`` setting).
+
+    You must explicitly pass ``is_live_trading=true`` to enable live trading.
+    """
+    cfg = await _get_or_create_settings(db)
+    cfg.is_live_trading = is_live_trading
+    cfg.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    await db.commit()
+    mode_label = "Live Trading" if is_live_trading else "Analysis"
+    return {
+        "is_live_trading": is_live_trading,
+        "mode": mode_label,
+        "message": f"Switched to {mode_label} mode",
+    }
+
+
+# ── Zerodha Kite login flow ────────────────────────────────────────────────────
 
 @router.get("/login-url")
 async def get_login_url(db: AsyncSession = Depends(get_db)):

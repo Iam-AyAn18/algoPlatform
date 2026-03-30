@@ -50,7 +50,8 @@ async def lifespan(app: FastAPI):
 
     # Start real-time background tasks.
     from app.core.database import AsyncSessionLocal
-    from app.services.realtime_service import price_broadcaster, strategy_scanner
+    from app.services.realtime_service import price_broadcaster, strategy_scanner, manager
+    from app.services.ticker_service import ticker_broadcaster
 
     _price_task = asyncio.create_task(
         price_broadcaster(_get_watchlist_symbols),
@@ -60,14 +61,19 @@ async def lifespan(app: FastAPI):
         strategy_scanner(_get_watchlist_symbols, AsyncSessionLocal),
         name="strategy_scanner",
     )
+    _ticker_task = asyncio.create_task(
+        ticker_broadcaster(_get_watchlist_symbols, AsyncSessionLocal, manager),
+        name="ticker_broadcaster",
+    )
 
     yield
 
     # Graceful shutdown: cancel background tasks.
     _price_task.cancel()
     _strategy_task.cancel()
+    _ticker_task.cancel()
     try:
-        await asyncio.gather(_price_task, _strategy_task, return_exceptions=True)
+        await asyncio.gather(_price_task, _strategy_task, _ticker_task, return_exceptions=True)
     except Exception:
         pass
 

@@ -83,6 +83,10 @@ export const getBrokerPositions = () =>
 export const getBrokerOrders = () =>
   api.get('/broker/orders').then(r => r.data);
 
+// Trading mode (Analysis vs Live Trading)
+export const setTradingMode = (isLiveTrading) =>
+  api.post('/broker/trading-mode', null, { params: { is_live_trading: isLiveTrading } }).then(r => r.data);
+
 // Algo Trading – Webhook & Action Center
 export const sendWebhookSignal = (payload) =>
   api.post('/algo/webhook', payload).then(r => r.data);

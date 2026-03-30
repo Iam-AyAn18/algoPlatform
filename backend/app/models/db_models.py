@@ -120,6 +120,8 @@ class BrokerSettings(Base):
     # Default product type for real orders: CNC (delivery), MIS (intraday), NRML (F&O)
     default_product: Mapped[str] = mapped_column(String(10), default="CNC")
     connected: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Safety gate: False = Analysis mode (no real orders), True = Live Trading mode
+    is_live_trading: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     )

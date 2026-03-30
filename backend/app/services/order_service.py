@@ -55,6 +55,11 @@ async def place_order(order_in: OrderCreate, db: AsyncSession) -> OrderResponse:
     broker_cfg = await _get_broker_settings(db)
     trade_mode = broker_cfg.trade_mode if broker_cfg else "paper"
 
+    # Analysis mode safety gate: block real orders when is_live_trading is False.
+    if order_in.use_broker and broker_cfg and not broker_cfg.is_live_trading:
+        # Downgrade to paper trade silently -- real money is never at risk.
+        return await _place_paper_order(order_in, db)
+
     # Semi-auto mode: queue order for manual approval in Action Center
     if trade_mode == "semi_auto" and order_in.use_broker:
         order = Order(

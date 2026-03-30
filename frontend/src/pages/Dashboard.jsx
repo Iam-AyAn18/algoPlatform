@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getNifty50, getHistorical } from '../api';
+import { getNifty50, getHistorical, getBrokerSettings, updateBrokerSettings, getBrokerLoginUrl, exchangeRequestToken } from '../api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import StockCard from '../components/StockCard';
 import PriceChart from '../components/PriceChart';
@@ -12,6 +12,8 @@ import BacktestPanel from '../components/BacktestPanel';
 import BrokerSettings from '../components/BrokerSettings';
 import AlgoTrader from '../components/AlgoTrader';
 import HelpGuide from '../components/HelpGuide';
+import TradingModeSwitch from '../components/TradingModeSwitch';
+import ZerodhaLogin from './ZerodhaLogin';
 import { RefreshCw, TrendingUp, Radio } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -22,6 +24,10 @@ export default function Dashboard() {
   const [orderRefresh, setOrderRefresh] = useState(0);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loadingMarket, setLoadingMarket] = useState(true);
+
+  // Broker state
+  const [brokerState, setBrokerState] = useState(null); // null = not loaded yet
+  const [showZerodhaLogin, setShowZerodhaLogin] = useState(false);
 
   // Real-time WebSocket feed
   const { prices: livePrices, connected: wsConnected, lastSignal } = useWebSocket();
@@ -43,6 +49,22 @@ export default function Dashboard() {
       { duration: 6000 }
     );
   }, [lastSignal]);
+
+  // Load broker settings on mount
+  useEffect(() => {
+    getBrokerSettings()
+      .then(data => setBrokerState(data))
+      .catch(() => setBrokerState(null));
+  }, []);
+
+  // Show the Zerodha login page if broker=zerodha but not connected
+  useEffect(() => {
+    if (brokerState && brokerState.broker_name === 'zerodha' && !brokerState.connected) {
+      setShowZerodhaLogin(true);
+    } else {
+      setShowZerodhaLogin(false);
+    }
+  }, [brokerState]);
 
   const loadMarket = useCallback(async () => {
     setLoadingMarket(true);
@@ -71,6 +93,29 @@ export default function Dashboard() {
     setSelectedSymbol({ symbol, exchange });
   };
 
+  // ZerodhaLogin handlers
+  async function handleSaveCredentials({ api_key, api_secret }) {
+    const updated = await updateBrokerSettings({
+      broker_name: 'zerodha', api_key, api_secret, access_token: '',
+      user_id: brokerState?.user_id || '',
+      trade_mode: brokerState?.trade_mode || 'paper',
+      default_product: brokerState?.default_product || 'CNC',
+      is_live_trading: brokerState?.is_live_trading || false,
+    });
+    setBrokerState(updated);
+  }
+
+  async function handleGetLoginUrl() {
+    const data = await getBrokerLoginUrl();
+    return data.login_url;
+  }
+
+  async function handleExchangeToken(token) {
+    await exchangeRequestToken(token);
+    const updated = await getBrokerSettings();
+    setBrokerState(updated);
+  }
+
   const tabs = [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'portfolio', label: 'Portfolio' },
@@ -81,6 +126,30 @@ export default function Dashboard() {
     { id: 'broker', label: 'Broker' },
     { id: 'help', label: '? Help' },
   ];
+
+  // Show Zerodha login page when needed
+  if (showZerodhaLogin) {
+    return (
+      <>
+        <ZerodhaLogin
+          apiKeySet={brokerState?.api_key_masked ? brokerState.api_key_masked.length > 0 : false}
+          onSaveCredentials={handleSaveCredentials}
+          onGetLoginUrl={handleGetLoginUrl}
+          onExchangeToken={handleExchangeToken}
+          onDone={() => setShowZerodhaLogin(false)}
+        />
+        {/* Allow skipping login to use in paper/analysis mode */}
+        <div className="fixed bottom-4 left-0 right-0 flex justify-center z-50">
+          <button
+            onClick={() => setShowZerodhaLogin(false)}
+            className="text-gray-500 hover:text-gray-300 text-xs bg-gray-900 border border-gray-700 rounded-full px-4 py-1.5 transition-colors"
+          >
+            Skip – continue in Analysis mode (paper trading)
+          </button>
+        </div>
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -103,6 +172,13 @@ export default function Dashboard() {
               <Radio size={10} className={wsConnected ? 'animate-pulse' : ''} />
               {wsConnected ? 'Live' : 'Offline'}
             </span>
+            {/* Trading Mode Switch */}
+            {brokerState !== null && (
+              <TradingModeSwitch
+                isLiveTrading={brokerState?.is_live_trading || false}
+                onChange={(val) => setBrokerState(s => s ? { ...s, is_live_trading: val } : s)}
+              />
+            )}
           </div>
           <nav className="flex gap-1 overflow-x-auto">
             {tabs.map(tab => (

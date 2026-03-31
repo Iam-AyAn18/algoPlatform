@@ -14,6 +14,7 @@ import AlgoTrader from '../components/AlgoTrader';
 import HelpGuide from '../components/HelpGuide';
 import TradingModeSwitch from '../components/TradingModeSwitch';
 import ZerodhaLogin from './ZerodhaLogin';
+import KiteLogin from './KiteLogin';
 import { RefreshCw, TrendingUp, Radio } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -124,6 +125,7 @@ export default function Dashboard() {
     { id: 'backtest', label: 'Backtest' },
     { id: 'algo', label: 'Algo Trading' },
     { id: 'broker', label: 'Broker' },
+    { id: 'kite-login', label: 'Kite API Login' },
     { id: 'help', label: '? Help' },
   ];
 
@@ -296,6 +298,19 @@ export default function Dashboard() {
           <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
             <BrokerSettings />
           </div>
+        )}
+
+        {/* Kite API Login Tab */}
+        {activeTab === 'kite-login' && (
+          <KiteLogin
+            brokerState={brokerState}
+            onSaveCredentials={handleSaveCredentials}
+            onGetLoginUrl={handleGetLoginUrl}
+            onExchangeToken={handleExchangeToken}
+            onDone={() => {
+              getBrokerSettings().then(data => setBrokerState(data)).catch(() => {});
+            }}
+          />
         )}
 
         {/* Help Tab */}
